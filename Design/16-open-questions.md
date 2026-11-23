@@ -36,4 +36,5 @@ This started as a list of open questions. All but one were decided on 2026-11-23
 | ID | Question | Plan | Docs |
 |----|----------|------|------|
 | Q-19 | Exact SEH funclet / establisher-frame convention on ARM64 | Not a preference: determine empirically from `cl` output and `__C_specific_handler` behaviour before phase 6. | [09](09-unwind-and-seh.md) |
+| Q-27 | **Needs you.** Repository visibility versus Q-01: Q-01 says "keep private for now", but `Zwaliebaba/NeuronCompiler` is public on GitHub. Without a licence file the code is visible but no rights are granted. | Your decision: make the repository private (hosted Windows ARM64 runners are then billed against private-repository minutes, at 2 vCPUs), or keep it public and pick a licence now. | [12](12-driver-and-toolchain.md) |
 | Q-26 | `S_FRAMEPROC` local/parameter base-pointer encoding on ARM64. Phase 0 writes 2 ("frame pointer"), following the x64 convention; LLVM's dumper cannot decode ARM64 values, so this is unverified. | Compare with `cl /Z7` output on Windows during phase-0 acceptance. | [10](10-codeview.md) |

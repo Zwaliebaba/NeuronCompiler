@@ -1,9 +1,12 @@
-# Linux CI: builds with both stage-0 compilers, runs the unit tests (including
-# the llvm-mc encoding differential) and the lld-link phase-0 link test.
-# Windows-on-Arm acceptance (link.exe, running the programs) is
-# tests/windows/p0-accept.cmd; it is not wired into CI because hosted ARM64
-# Windows runners are not available to private repositories without
-# larger-runner billing.
+# CI.
+#   linux:         builds with both stage-0 compilers, runs the unit tests
+#                  (including the llvm-mc encoding differential), the lld-link
+#                  link test and the Windows ARM64 compile check.
+#   windows-arm64: native Windows on Arm (hosted windows-11-arm runner, free for
+#                  public repositories): builds the tools with clang, then runs
+#                  tests/windows/p0-accept.cmd - link.exe, running both demo
+#                  programs, and the RtlVirtualUnwind cross-check - and the unit
+#                  tests natively.
 name: ci
 on:
   push:
@@ -39,3 +42,29 @@ jobs:
             build/p0/p0_nocrt.exe
             build/p0/*.pseudo.c
             build/p0/*.lst
+
+  windows-arm64:
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Phase-0 acceptance (link.exe, run, RtlVirtualUnwind)
+        shell: cmd
+        run: |
+          set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+          for /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -products * -property installationPath`) do set "VSDIR=%%i"
+          echo Visual Studio: %VSDIR%
+          call "%VSDIR%\VC\Auxiliary\Build\vcvarsall.bat" arm64 || exit /b 1
+          rem Prefer clang on PATH; fall back to the clang shipped with Visual Studio.
+          where clang >nul 2>nul || set "PATH=%VSDIR%\VC\Tools\Llvm\ARM64\bin;%PATH%"
+          clang --version || exit /b 1
+          link /? | findstr /c:"Version" 
+          call tests\windows\p0-accept.cmd || exit /b 1
+      - name: Unit tests (native ARM64)
+        shell: cmd
+        run: build\ncc-test.exe
+      - name: Upload acceptance outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p0-windows-arm64
+          path: build/p0win/
