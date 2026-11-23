@@ -1,0 +1,104 @@
+# C layout (AGENTS.md §4).
+#
+# Conformance authority: AGENTS.md. clang-format owns WHITESPACE; /.clang-tidy owns NAMING and
+# semantics. The two never overlap: clang-tidy has no check that reports a wrong brace position
+# or an over-long line, and clang-format cannot see that a parameter is missing its `_`. Asking
+# either to do the other's job is how a repository ends up with neither.
+#
+# The values are carried over from the sibling repositories Outpost.Warzone, where they were
+# measured against ~223,000 lines of C++, and Nomad-Commander. Those trees are C++ and this one is
+# NC-Boot C23 (Design/13-self-hosting-bootstrap.md §1), so the C++-only options (namespaces,
+# access modifiers, constructor initialisers, lambdas, requires-clauses, the VS unit-test macros)
+# are gone; every value that applies to C is unchanged.
+#
+# `Language: Cpp` is correct for C: clang-format formats C with its C++ style. Verified on
+# clang-format 22.1.8 against the .c and .h files in this tree.
+#
+# ── Status: NOT YET GATED ──────────────────────────────────────────────────────────────────
+#
+# The phase-0 sources predate this file and are not formatted to it (AGENTS.md §8). They are
+# converted in one dedicated change, and that change wires `make check-format` into the Linux CI
+# job, pinned to clang-format 18.1.3 -- the version ubuntu-24.04 installs, which is the runner
+# .github/workflows/ci.yml already uses. The output changes between releases, so if a local run
+# disagrees with CI, compare the version line first.
+#
+# On Windows the clang-format you have is almost certainly NOT 18: Visual Studio 2026 bundles 22
+# at VC\Tools\Llvm\<arch>\bin, and 22 breaks a long call argument list in a different place than
+# 18 does. The Linux job is the answer that counts.
+#
+# Keep ColumnLimit and IndentWidth in step with /.editorconfig; if you change one, change the other
+# in the same commit or they start lying to each other.
+#
+# ── What is NOT formatted ──────────────────────────────────────────────────────────────────
+#
+# X-macro tables (*.def, AGENTS.md §2) are column-aligned by hand so that a table reads as a
+# table, and clang-format would collapse every column. The format check passes *.c and *.h only.
+# A run of hand-aligned rows inside a .c or .h (a static table of encodings, say) is fenced with
+# `// clang-format off` / `// clang-format on` and nothing else is.
+#
+# ── Deliberate choices ─────────────────────────────────────────────────────────────────────
+#
+# LineEnding is left at its default (DeriveLF) ON PURPOSE. /.gitattributes pins the working-tree
+# line ending of every C file, and deriving per file means the formatter never fights it.
+#
+# AlignConsecutive{Assignments,Declarations} are OFF: clang-format cannot express "align this
+# short run but not that one", and switching them on aligns unrelated statements across whole
+# blocks.
+#
+# ReflowComments is OFF so that the block comments explaining a decision keep the line breaks
+# their author chose.
+
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: Latest
+
+ColumnLimit: 140
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+ContinuationIndentWidth: 2
+
+# Allman: every brace on its own line -- functions, structs, enums and control flow alike.
+BreakBeforeBraces: Allman
+
+IndentCaseLabels: false
+
+IndentPPDirectives: AfterHash
+PPIndentWidth: 3
+
+# Arena* _arena, not Arena *_arena.
+PointerAlignment: Left
+ReferenceAlignment: Left
+DerivePointerAlignment: false
+
+# Control flow never folds onto one line; an empty body may.
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortBlocksOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+
+SpaceBeforeParens: ControlStatements
+
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+AlignAfterOpenBracket: Align
+AlignEscapedNewlines: Left
+AlignTrailingComments: true
+
+# Include order is grouped by hand (AGENTS.md §4): a .c includes its own header first, then other
+# project headers, then the standard library, and no platform header appears outside the OS layer.
+# The own-header-first position is the self-containment check for that header, and the
+# include-with-parameters pattern (`#define HMAP_K ...` then `#include "core/hmap.inc"`) makes the
+# position of an #include part of its meaning. A formatter reordering these is a correctness risk,
+# not a style preference.
+SortIncludes: Never
+IncludeBlocks: Preserve
+
+BinPackArguments: true
+BinPackParameters: true
+Cpp11BracedListStyle: true
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+SpacesBeforeTrailingComments: 1
+ReflowComments: false

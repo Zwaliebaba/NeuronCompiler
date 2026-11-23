@@ -1,0 +1,163 @@
+# AGENTS.md §1 — naming and semantics, machine-readable. This file is the single source of truth
+# for the option values; AGENTS.md states the rules in prose and does not repeat the settings.
+#
+# The conventions are carried over from the sibling repositories Outpost.Warzone and
+# Nomad-Commander, so that a reader moving between the trees reads one style. Those trees are C++;
+# this one is NC-Boot C23 (Design/13-self-hosting-bootstrap.md §1). The C++-only kinds -- namespaces,
+# classes, methods, concepts, templates, private/protected members and their m_/sm_ prefixes -- have
+# no C counterpart and are gone. Every rule that has one is unchanged, and the C-specific points are
+# stated next to the option they affect.
+#
+# This file owns IDENTIFIERS and semantics. /.clang-format owns whitespace, and the two never
+# overlap: clang-tidy has no check that reports a wrong brace position or an over-long line, and
+# clang-format cannot see that a parameter is missing its `_`.
+#
+# ── Status: NOT YET GATED ──────────────────────────────────────────────────────────────────
+#
+# The phase-0 sources predate this file and do not follow it (AGENTS.md §8): their functions are
+# snake_case, their enumerators are prefixed UPPER_CASE and their parameters carry no `_`. They are
+# converted in one dedicated change, and that change wires `make tidy` into the Linux CI job in
+# .github/workflows/ci.yml. From then on a whole-tree pass comes back clean and a finding is a defect
+# rather than archaeology -- fix the code, do not narrow the filter.
+#
+# Run it yourself, on the files you wrote, before you push. It takes the same switches as the
+# Makefile, and nothing else, because every include in this tree is relative (AGENTS.md §2):
+#
+#   clang-tidy --quiet src/core/arena.c -- -std=c2x
+#
+# The OS layer has a `_WIN32` half that a Linux run never sees. Lint it the way `make check-windows`
+# compiles it, against the mingw-w64 headers:
+#
+#   clang-tidy --quiet src/core/os.c -- -std=c2x --target=aarch64-w64-windows-gnu \
+#     -isystem /usr/share/mingw-w64/include
+#
+# THE VERSION MATTERS, and the gate PINS it when it is wired. "Clean" is always clean *under
+# something*, and that something has to have a number. In the sibling tree the runner image moved
+# LLVM releases underneath an unpinned clang-tidy and main went red with no change to the code:
+# the newer release reported two correct constructs and, in the same run, one real defect. The
+# lesson travels even though the incident does not: a version change must not be able to turn main
+# red on its own. These settings were verified against clang-tidy 22.1.8.
+
+# readability-identifier-length is deliberately NOT enabled. Its defaults reject the domain
+# vocabulary this codebase is built on -- rd, rn, rm, imm, sz, _a, _b -- and short names here are
+# precise, not lazy.
+
+Checks: >
+  readability-identifier-naming,
+  bugprone-*,
+  performance-*,
+  modernize-use-nullptr,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -clang-analyzer-optin.performance.Padding,
+  -performance-enum-size
+
+# `-clang-analyzer-optin.performance.Padding` is a judgement call, not a mechanical exclusion. It
+# is an OPT-IN analyzer that arrives with clang-tidy's defaults because this list does not begin
+# with `-*`. COFF headers, symbol records, relocation entries, CodeView records and .xdata words
+# have layouts fixed by a specification -- a symbol record is 18 bytes because the PE/COFF spec
+# says so -- and reordering fields to save padding is exactly the change this repository must not
+# make casually.
+#
+# `-bugprone-narrowing-conversions` is off because narrowing is pervasive and deliberate in a
+# back end: a 64-bit offset into a 32-bit relocation field, an immediate into a 12-bit or 26-bit
+# instruction field, a byte offset into a scaled word count in an unwind code. It would fire on
+# most of the encoder, the COFF writer and the unwind emitter, where the narrowing IS the design
+# -- and range is checked explicitly there (nc_fits_signed / nc_fits_unsigned) rather than assumed.
+#
+# `-performance-enum-size` is off for the same reason as the padding check: it asks a closed
+# taxonomy to shrink to the smallest type its current enumerators happen to fit in. The enums in
+# this tree that are not opcodes are format values -- section characteristics, storage classes,
+# CodeView record kinds, unwind codes -- and their width belongs to the format, not to the
+# enumerators that exist today.
+#
+# `modernize-use-nullptr` applies to C: NC-Boot has C23 `nullptr` and writes it in place of 0 and
+# NULL.
+#
+# NOTE ON THE FORMAT: `Checks:` is a FOLDED scalar, so a `#` line indented under it is not a
+# comment — it folds into the value and corrupts the check list. Every comment belongs here.
+#
+# WarningsAsErrors: '*' says every enabled check is fatal, so that the gate has one answer rather
+# than two settings disagreeing about which findings matter.
+WarningsAsErrors: '*'
+
+# The headers that are linted: every .h under src/ and tests/, at any depth. The tree is nested by
+# component (Design/02-architecture.md §2), so the filter is too.
+#
+# [/\\], not '/'. On Windows the paths arrive with backslashes, so a filter anchored on a forward
+# slash matches no header at all and silently suppresses every finding in one. Headers outside
+# src/ and tests/ are not ours to rename: the platform and C library headers are system headers,
+# and the compiler-provided headers under include/ and the libncrt sources under runtime/ spell
+# what the C standard, the MSVC CRT and the ABI make them spell (AGENTS.md R4). When those
+# directories land they get their own .clang-tidy, with the naming check off.
+HeaderFilterRegex: '[/\\](src|tests)[/\\].+\.h$'
+
+CheckOptions:
+  # ── Types: PascalCase, no prefix of any kind (R2) ──────────────────────────────────
+  # In C a struct, union or enum tag and the typedef that names it are spelled the same:
+  # `typedef struct Arena { ... } Arena;`.
+  - { key: readability-identifier-naming.StructCase,               value: CamelCase  }
+  - { key: readability-identifier-naming.UnionCase,                value: CamelCase  }
+  - { key: readability-identifier-naming.EnumCase,                 value: CamelCase  }
+  - { key: readability-identifier-naming.TypedefCase,              value: CamelCase  }
+
+  # The fixed-width shorthands from core/core.h -- u8 u16 u32 u64 i8 i16 i32 i64 -- are the one
+  # standing exception to TypedefCase. They are the vocabulary of every encoder and record layout in
+  # the tree, and spelling them `U32` buys nothing but noise.
+  - { key: readability-identifier-naming.TypedefIgnoredRegexp,     value: '^[iu](8|16|32|64)$' }
+
+  # ── Functions: PascalCase ──────────────────────────────────────────────────────────
+  # `main` and its `argc`/`argv` are spelled by the C standard. The check exempts them in C++ but
+  # NOT in C (measured, clang-tidy 22.1.8), so both exemptions are stated here.
+  - { key: readability-identifier-naming.FunctionCase,             value: CamelCase  }
+  - { key: readability-identifier-naming.FunctionIgnoredRegexp,    value: '^main$'   }
+  - { key: readability-identifier-naming.IgnoreMainLikeFunctions,  value: true       }
+
+  # ── Enumerators: PascalCase; constants: UPPER_CASE (R3) ────────────────────────────
+  # An enumerator of a NAMED enum is a value of a type and is PascalCase, led by its type's name,
+  # because C enumerators share one file-scope namespace: `A64CondEq`, `TargetKindLabel`.
+  #
+  # An enumerator of an ANONYMOUS enum is how NC-Boot spells an integer compile-time constant
+  # (`constexpr` objects are not allowed until the stage-0 minimum rises, Design/13 §1), so it is a
+  # constant and is UPPER_CASE: `enum { ARENA_CHUNK_BYTES = 64 * 1024 };`. Format values keep the
+  # specification's spelling, which is UPPER_CASE too: `IMAGE_SCN_CNT_CODE`, `UWOP_SAVE_FPLR`.
+  #
+  # clang-tidy cannot tell a named enum from an anonymous one, so it accepts an UPPER_CASE
+  # enumerator with at least one underscore anywhere. Which of the two shapes an enumerator takes
+  # is therefore review's job, and AGENTS.md §1 says so.
+  - { key: readability-identifier-naming.EnumConstantCase,         value: CamelCase  }
+  - { key: readability-identifier-naming.EnumConstantIgnoredRegexp, value: '^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$' }
+
+  - { key: readability-identifier-naming.ConstexprVariableCase,    value: UPPER_CASE }
+  - { key: readability-identifier-naming.GlobalConstantCase,       value: UPPER_CASE }
+  - { key: readability-identifier-naming.StaticConstantCase,       value: UPPER_CASE }
+
+  # ── Struct and union fields: plain camelCase (R8) ──────────────────────────────────
+  # C has no access control, so every field is what the C++ trees call a public aggregate field:
+  # no m_. MemberCase, not PublicMemberCase -- clang-tidy files a C field under "member" because it
+  # has no access specifier at all, and PublicMemberCase would never fire.
+  - { key: readability-identifier-naming.MemberCase,               value: camelBack  }
+
+  # ── Storage prefixes ───────────────────────────────────────────────────────────────
+  # File-scope variables, `static` or not, and function-local statics: g_.
+  - { key: readability-identifier-naming.GlobalVariableCase,       value: camelBack  }
+  - { key: readability-identifier-naming.GlobalVariablePrefix,     value: 'g_'       }
+  - { key: readability-identifier-naming.StaticVariableCase,       value: camelBack  }
+  - { key: readability-identifier-naming.StaticVariablePrefix,     value: 'g_'       }
+
+  # ── Parameters carry a leading underscore (R1) ─────────────────────────────────────
+  # Legal C: C23 §7.1.3 reserves _Uppercase and __ for any use, and _lowercase only at FILE scope.
+  # A parameter has block or prototype scope, never file scope.
+  - { key: readability-identifier-naming.ParameterCase,            value: camelBack  }
+  - { key: readability-identifier-naming.ParameterPrefix,          value: '_'        }
+  - { key: readability-identifier-naming.LocalVariableCase,        value: camelBack  }
+
+  # bugprone-reserved-identifier gets this wrong for C: it reports a `_camelCase` parameter in a
+  # header PROTOTYPE as "reserved in the global namespace" (measured, clang-tidy 22.1.8), although a
+  # prototype parameter has prototype scope. The form is allowed outright rather than the check
+  # turned off, so that `__x` and `_Upper` are still caught everywhere. Nothing at file scope can
+  # use the allowance: a file-scope variable needs g_ and a function is PascalCase, so the naming
+  # check above rejects a file-scope `_lowercase` name before this one is asked.
+  - { key: bugprone-reserved-identifier.AllowedIdentifiers,        value: '^_[a-z][a-zA-Z0-9]*$' }
+
+  - { key: readability-identifier-naming.MacroDefinitionCase,      value: UPPER_CASE }

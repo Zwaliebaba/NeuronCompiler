@@ -1,0 +1,59 @@
+# Baseline whitespace, so an editor gets it right before clang-format runs.
+#
+# /.clang-format is the AUTHORITY for C layout (AGENTS.md §4). This file exists for the formats
+# clang-format does not cover -- the X-macro tables, make, cmd, shell, YAML, Markdown -- and, for C,
+# repeats only the two numbers an editor needs before the first save. Where the two disagree,
+# clang-format wins; keep IndentWidth and ColumnLimit in step with it.
+#
+# Line endings are stated per format here AND in /.gitattributes, which is what actually decides
+# what a checkout writes. Change one, change the other in the same commit.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Mirrors /.clang-format's IndentWidth and ColumnLimit.
+[*.{c,h}]
+indent_size = 2
+max_line_length = 140
+
+# X-macro tables (*.def) and include-with-parameters templates (*.inc), AGENTS.md §2. They are C
+# that is #included, and read at the same width as the C that expands them. A .def is aligned by
+# hand into columns and is not run through clang-format.
+[*.{def,inc}]
+indent_size = 2
+max_line_length = 140
+
+# make needs a hard tab before every recipe line, and GNU make on Linux passes a trailing CR
+# through into the shell command.
+[Makefile]
+indent_style = tab
+end_of_line = lf
+
+# cmd.exe misparses labels and `goto` targets in a file with bare LF endings.
+[*.{cmd,bat}]
+end_of_line = crlf
+
+# LF for what is read by non-Windows tooling: the CI runner and the POSIX shell.
+[*.{yml,yaml}]
+end_of_line = lf
+indent_size = 2
+
+[*.sh]
+end_of_line = lf
+indent_size = 2
+
+[*.py]
+end_of_line = lf
+indent_size = 2
+max_line_length = 120
+
+[*.md]
+end_of_line = lf
+trim_trailing_whitespace = false

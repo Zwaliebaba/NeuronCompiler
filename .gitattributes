@@ -1,0 +1,53 @@
+###############################################################################
+# Normalize every text file to LF in the repository.
+###############################################################################
+* text=auto
+
+###############################################################################
+# Line endings, kept in step with /.editorconfig (AGENTS.md §4)
+#
+# `* text=auto` above normalizes every text file to LF in the REPOSITORY. What it does not
+# do is decide what the WORKING TREE gets -- that is core.autocrlf's business, and therefore
+# different on every machine -- while /.editorconfig states a definite answer per format and
+# every editor that honours it obeys. Two files disagreeing about one file is how a whole-file
+# diff turns up inside a one-line change, so the formats .editorconfig is explicit about are
+# explicit here too. Change one, change the other in the same commit.
+#
+# Pinning the C sources matters more here than in most trees. This tree is built on Linux
+# and Windows alike, and the compiler will one day compile itself and hash its own sources
+# into CodeView file checksums (Design/10-codeview.md). Left to core.autocrlf, a Linux and a
+# Windows checkout of one commit hold different bytes; pinned, they hold the same ones.
+###############################################################################
+
+# CRLF in the working tree: the C sources and the X-macro tables, the cmd scripts (cmd.exe
+# misparses labels in LF files), and the root configuration files.
+*.c             text eol=crlf
+*.h             text eol=crlf
+*.def           text eol=crlf
+*.inc           text eol=crlf
+*.cmd           text eol=crlf
+*.bat           text eol=crlf
+.clang-format   text eol=crlf
+.clang-tidy     text eol=crlf
+.editorconfig   text eol=crlf
+.gitattributes  text eol=crlf
+.gitignore      text eol=crlf
+
+# LF in the working tree: what make, the POSIX shell and the CI runner read. GNU make on
+# Linux passes a trailing CR into every recipe command.
+Makefile        text eol=lf
+*.sh            text eol=lf
+*.py            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.md            text eol=lf
+
+###############################################################################
+# Binary inputs and outputs. Test fixtures that are objects, images or PDBs must
+# never be normalized.
+###############################################################################
+*.obj           binary
+*.lib           binary
+*.exe           binary
+*.dll           binary
+*.pdb           binary
