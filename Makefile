@@ -65,7 +65,7 @@ check-windows:
 LLVM_PIN     ?= 18.1.3
 CLANG_FORMAT ?= clang-format
 CLANG_TIDY   ?= clang-tidy
-FORMAT_FILES := $(sort $(shell find src tests -type f -name '*.[ch]'))
+FORMAT_FILES := $(sort $(shell find src tests -type f \( -name '*.[ch]' -o -name '*.inc' \)))
 TIDY_FILES   := $(sort $(shell find src tests -type f -name '*.c'))
 TREE_FILES   := $(sort $(shell find src tests -type f))
 

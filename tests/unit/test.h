@@ -41,6 +41,10 @@ void TestEncodeSymbolic(void);
 void TestUnwind(void);
 void TestCoff(void);
 void TestModule(void);
+void TestHmap(void);
+void TestSym(void);
+void TestSource(void);
+void TestDiag(void);
 
 /* Returns true if an external tool is on PATH (tests that need llvm-mc etc.
  * are skipped, loudly, when it is not). */

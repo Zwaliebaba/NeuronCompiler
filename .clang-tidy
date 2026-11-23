@@ -83,8 +83,9 @@ Checks: >
 # than two settings disagreeing about which findings matter.
 WarningsAsErrors: '*'
 
-# The headers that are linted: every .h under src/ and tests/, at any depth. The tree is nested by
-# component (Design/02-architecture.md §2), so the filter is too.
+# The headers that are linted: every .h under src/ and tests/, at any depth, and every .inc
+# include-with-parameters template (core/hmap.inc), whose code is compiled into the .c that
+# instantiates it. The tree is nested by component (Design/02-architecture.md §2), so the filter is too.
 #
 # [/\\], not '/'. On Windows the paths arrive with backslashes, so a filter anchored on a forward
 # slash matches no header at all and silently suppresses every finding in one. Headers outside
@@ -92,7 +93,7 @@ WarningsAsErrors: '*'
 # and the compiler-provided headers under include/ and the libncrt sources under runtime/ spell
 # what the C standard, the MSVC CRT and the ABI make them spell (AGENTS.md R4). When those
 # directories land they get their own .clang-tidy, with the naming check off.
-HeaderFilterRegex: '[/\\](src|tests)[/\\].+\.h$'
+HeaderFilterRegex: '[/\\](src|tests)[/\\].+\.(h|inc)$'
 
 CheckOptions:
   # ── Types: PascalCase, no prefix of any kind (R2) ──────────────────────────────────
