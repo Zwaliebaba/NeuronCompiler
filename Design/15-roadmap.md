@@ -54,6 +54,28 @@ Order-of-magnitude, non-blank, non-comment lines of C excluding tests, to calibr
 
 Tests and test tooling are of the same order again. For comparison, TCC is roughly 80k lines (no SSA optimiser, no CodeView), and Clang's C-relevant front end alone is several times our whole estimate. The estimate is plausible for the scope only because the design refuses retargetability, C++, a linker, and LLVM-class optimisation.
 
-## 4. Critical path
+## 4. Phase 0 status (November 2026)
+
+Implemented and tested on Linux. The core library covers arenas, vectors, byte buffers, CRC-32 and the OS layer. The ARM64 instruction table has 224 entries, with encoder, printer and constant materialisation. The COFF writer supports COMDATs, associative sections, long names, `.drectve`, bigobj and relocation overflow. Also done: frame plans, prologues and epilogues, packed and full unwind records, the unwind verifier, branch relaxation, minimal CodeView, and `p0demo`, which builds two programs from hand-written MIR.
+
+Verified so far:
+
+* All 1,489 generated instruction forms encode byte-identically to `llvm-mc`.
+* All 6,636 logical immediates round-trip.
+* 38,016 frame shapes pass the verifier, and its mutation tests behave as specified.
+* The no-CRT program links with `lld-link` against an import library generated from a `.def` file, and LLVM's readers decode the unwind data, imports and PDB as intended.
+* Output is byte-identical across runs and across GCC- versus Clang-built tools.
+* Clean under ASan and UBSan.
+
+Outstanding before the phase-0 exit criterion is met. All of these need Windows on Arm:
+
+* Linking and running both programs with `link.exe` (`tests/windows/p0-accept.cmd`).
+* Stepping them in the VS debugger.
+* The `RtlVirtualUnwind` single-step harness.
+* Confirming the `S_FRAMEPROC` frame-register encoding against `cl /Z7` (Q-26).
+
+Moved to phase 1 because only the front end needs them: string interning, bigint, correctly rounded float parsing, SHA-256 file checksums. Jump tables move to phase 1 with `switch` lowering.
+
+## 5. Critical path
 
 The longest dependency chain is phase 0 → 1 → 3 → 5, with phase 4 (MSVC compatibility breadth) as the largest *uncertain* block (R1) running alongside 3. The earliest point at which the compiler is useful to someone else is the end of phase 4 at `-O0`; the earliest point at which it can be compared with MSVC on its own terms is the end of phase 5.

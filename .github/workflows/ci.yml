@@ -1,0 +1,37 @@
+# Linux CI: builds with both stage-0 compilers, runs the unit tests (including
+# the llvm-mc encoding differential) and the lld-link phase-0 link test.
+# Windows-on-Arm acceptance (link.exe, running the programs) is
+# tests/windows/p0-accept.cmd; it is not wired into CI because hosted ARM64
+# Windows runners are not available to private repositories without
+# larger-runner billing.
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM tools
+        run: sudo apt-get update && sudo apt-get install -y clang llvm lld
+      - name: Build
+        run: make CC=${{ matrix.cc }}
+      - name: Unit tests
+        run: make CC=${{ matrix.cc }} test
+      - name: Link test
+        run: make CC=${{ matrix.cc }} test-link
+      - name: Upload phase-0 objects for Windows acceptance
+        if: matrix.cc == 'clang'
+        uses: actions/upload-artifact@v4
+        with:
+          name: p0-objects
+          path: |
+            build/p0/p0_nocrt.obj
+            build/p0/p0_crt.obj
+            build/p0/*.pseudo.c
+            build/p0/*.lst

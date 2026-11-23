@@ -37,14 +37,14 @@ Multiple epilogues are common at `-O2` (early returns duplicated by tail merging
 
 ## 3. Verifier
 
-The unwind verifier, run on every function in debug builds and in CI on everything we compile, is a symbolic interpreter for both sides:
+The unwind verifier (implemented in phase 0 as `unwind_verify`, `src/target/arm64/unwind.c`) runs on every function the module emits. It interprets both sides concretely rather than symbolically: it decodes the actual encoded instruction words, not the MIR, and seeds every register with a distinct sentinel value, which exposes the same errors more simply. It checks:
 
 * It executes the emitted prologue instructions one at a time over a symbolic machine state (`sp`, `x29`, `lr`, saved-register stack slots, all as expressions over the entry state), and at each instruction boundary *k* it runs the unwind codes the way the Windows unwinder would for a PC at offset *k* within the prologue (skipping the codes for not-yet-executed instructions), checking that the recovered entry `sp`, return address and every callee-saved register equal their entry values.
 * It does the same for every instruction boundary in every epilogue scope (skipping the already-executed codes from the epilogue's start index).
 * For one representative body PC, it runs the full code sequence and checks the same.
 * It decodes packed `.pdata` through the documented expansion and checks equivalence with the full form.
 
-This covers exactly the class of bugs that are otherwise found only when a sampling profiler hits a prologue. As an independent cross-check, CI also runs `llvm-readobj --unwind` and, on Windows, a harness that calls `RtlVirtualUnwind` at every instruction offset of every function in a test DLL against a context reconstructed by single-stepping (debug API), which tests against the real OS unwinder rather than our reading of the spec.
+This covers exactly the class of bugs that are otherwise found only when a sampling profiler hits a prologue. The test suite proves the verifier has teeth by mutation: every single-field change to a prologue instruction, and swapping the first two prologue instructions, must be rejected. For every bit-flip in a full `.xdata` record's unwind codes, the test names the exact set allowed to survive: padding after the final `end`, which is never executed, and the size of an `alloc` that is immediately undone by `set_fp` in unwind order. That size is semantically dead for any unwinder, ours or the OS's. As an independent cross-check, CI also runs `llvm-readobj --unwind` and, on Windows, a harness that calls `RtlVirtualUnwind` at every instruction offset of every function in a test DLL against a context reconstructed by single-stepping (debug API), which tests against the real OS unwinder rather than our reading of the spec.
 
 ## 4. `setjmp`/`longjmp`
 
