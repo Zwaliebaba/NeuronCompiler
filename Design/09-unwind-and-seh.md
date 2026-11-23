@@ -52,7 +52,7 @@ UCRT's ARM64 `longjmp` can restore state by unwinding through intervening frames
 
 ## 5. Structured exception handling (`__try`)
 
-SEH is part of the MSVC compatibility surface ([04-msvc-compatibility.md](04-msvc-compatibility.md) §3) and is scheduled after v1's core, but its representation is fixed now so the IR and frame design do not have to change later.
+SEH is part of the MSVC compatibility surface ([04-msvc-compatibility.md](04-msvc-compatibility.md) §3) and ships in v1.0, in roadmap phase 6 (Q-20). Its representation is fixed now so the IR and frame design do not have to change when it lands.
 
 **Language semantics.** `__try { } __except (filter) { }` and `__try { } __finally { }` with `__leave`, `GetExceptionCode()`, `GetExceptionInformation()` and `AbnormalTermination()`, following MSVC's C behaviour. Hardware faults inside the guarded region (access violations, `brk`-raised exceptions such as `__fastfail` and `__debugbreak`) must be catchable, which constrains optimisation (below). Integer division by zero does not trap on ARM64 (`sdiv` returns 0); whether to insert MSVC-style checks that raise `STATUS_INTEGER_DIVIDE_BY_ZERO` is decided by matching `cl`'s behaviour.
 
@@ -62,6 +62,6 @@ SEH is part of the MSVC compatibility surface ([04-msvc-compatibility.md](04-msv
 
 **Optimisation constraints.** Within a `__try` region, every instruction that may fault is an implicit edge to the handler. Rather than model that precisely (as LLVM does with `invoke`-like constructs), v1 takes MSVC's own conservative approach: any local referenced from a filter, `__except` block or `__finally` block, or live across a guarded region boundary, is kept in memory (treated as address-taken and `volatile` for the duration of the region); instructions are not moved into or out of guarded regions; and the guarded region's code is laid out contiguously so that it is a single `[Begin, End)` range.
 
-## Open items from this document
+## Decisions and open items
 
-Establisher-frame convention for funclets (Q-19); whether SEH belongs in v1 rather than v1.1 (Q-20).
+SEH is in v1.0 (Q-20). Still open: the establisher-frame convention for funclets, to be determined from `cl` output before phase 6 (Q-19).

@@ -23,7 +23,7 @@ This directory is the living design. Documents are numbered in reading order; ea
 | 13 | [Self-hosting and bootstrap](13-self-hosting-bootstrap.md) | Implementation dialect, bootstrap stages, reproducibility |
 | 14 | [Testing strategy](14-testing-strategy.md) | Conformance, ABI cross-testing, unwind and debug verification, fuzzing |
 | 15 | [Roadmap](15-roadmap.md) | Phases, exit criteria, effort estimate |
-| 16 | [Open questions](16-open-questions.md) | Decisions we still need to make together |
+| 16 | [Decisions and open questions](16-open-questions.md) | The decision log for questions raised by the design, plus anything still open |
 
 ## Baseline decisions
 
@@ -41,4 +41,4 @@ These were fixed at the outset and the rest of the design assumes them.
 
 ## Status
 
-Design draft 1, November 2026. Nothing is implemented yet; the repository contains only this directory.
+Design draft 2, November 2026: the open questions from draft 1 are decided (see [16-open-questions.md](16-open-questions.md)), except Q-19, which gets settled by inspecting `cl` output. The project stays private for now (Q-01). Claude implements and you review (Q-02), starting with phase 0. Nothing is implemented yet.

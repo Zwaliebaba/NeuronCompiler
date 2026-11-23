@@ -54,6 +54,6 @@ CodeView ARM64 register numbering (`CV_ARM64_*` in `cvconst.h`) is mapped from o
 
 Paths recorded in `S_OBJNAME`, `LF_BUILDINFO` and the file-checksum table are absolute by default (the debugger needs them), remapped by `/pathmap:old=new` (as `cl` supports), and normalised to backslashes. The SHA-256 file checksums let the debugger reject mismatched sources. Debug sections contain no timestamps.
 
-## Open items from this document
+## Decisions
 
-Natvis-based display of `_BitInt` (Q-21).
+`_BitInt(N > 64)` is a struct of limbs plus a shipped natvis visualiser (Q-21).

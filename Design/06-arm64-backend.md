@@ -68,7 +68,7 @@ Sibling calls (`tailcall` in NIR) become `b`/`br` after the epilogue when the ca
 
 After allocation, block parameters become parallel copies on edges (split critical edges first), sequentialised with cycle breaking via `x16`/`v31`.
 
-**Post-RA passes.** Load/store pairing (`ldr`/`ldr` and `str`/`str` at adjacent offsets → `ldp`/`stp`), redundant copy elimination, compare elimination (reuse the flags of a preceding `subs`/`adds`/`ands` instead of a separate `cmp`), and expansion of the `ATOMIC_*_LOOP` pseudos. LL/SC loops are expanded *after* allocation so that no spill code can land between `ldaxr` and `stlxr` (which would clear the exclusive monitor and livelock).
+**Post-RA passes.** Load/store pairing (`ldr`/`ldr` and `str`/`str` at adjacent offsets → `ldp`/`stp`), redundant copy elimination, compare elimination (reuse the flags of a preceding `subs`/`adds`/`ands` instead of a separate `cmp`), and expansion of the `ATOMIC_*_LOOP` pseudos (`CAS` loops for read-modify-write operations without an LSE instruction, and LL/SC loops under `/arch:armv8.0`). LL/SC loops are expanded *after* allocation so that no spill code can land between `ldaxr` and `stlxr` (which would clear the exclusive monitor and livelock).
 
 ## 5. Frame layout
 
@@ -126,8 +126,8 @@ The `-S` / `/FA` output is GNU/LLVM-syntax assembly with source-line annotations
 
 | Switch | Effect |
 |--------|--------|
-| `/arch:armv8.0` (default) | Baseline: FP, Advanced SIMD |
-| `/arch:armv8.1` | LSE atomics (`cas`, `ldadd`, `swp`…) instead of LL/SC loops |
+| `/arch:armv8.0` | Fallback for ARMv8.0-only CPUs: FP, Advanced SIMD, LL/SC atomics |
+| `/arch:armv8.1` (default) | Adds LSE atomics (`cas`, `casp`, `ldadd`, `swp`…) |
 | `/arch:armv8.2` | adds `+fp16` arithmetic, `+rcpc` (`ldapr` for acquire loads) when also requested |
 | `/feature:+crc,+crypto,+dotprod,+lse,+fp16,+rcpc` | Individual features |
 
@@ -137,6 +137,6 @@ Code that uses a feature not enabled by the target switch is still allowed throu
 
 `/GS` stack cookies: the prologue loads `__security_cookie`, mixes it with the frame pointer and stores it below the locals' arrays; the epilogue reloads, unmixes and calls `__security_check_cookie` (exact sequence to be matched against `cl` output). `/guard:cf`: indirect calls go through `__guard_check_icall_fptr` with the target in `x15`, address-taken functions are listed in `.gfids$y`, and `@feat.00` gets the CFG bit. Pointer authentication (`pacibsp`/`autibsp` with the `pac_sign_lr` unwind code) is supported by the unwind format and can be offered as `/Qpac-ret`. All three affect prologue/epilogue shape, which is why the frame lowering's canonical-shape table has room for them from the start.
 
-## Open items from this document
+## Decisions
 
-Whether to add a pre-RA instruction scheduler (Q-15); whether to support function fragments in v1 (Q-16).
+No pre-RA scheduler in v1; measure on hardware first (Q-15). No function fragments in v1; functions over 1 MiB of code are diagnosed (Q-16). ARMv8.1 baseline (Q-06).

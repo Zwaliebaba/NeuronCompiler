@@ -33,7 +33,7 @@ IRGen implements AAPCS64 stages A–C, which Windows adopts unchanged for non-va
 7. **Composite ≤ 16 bytes**: rounded up to a multiple of 8 and passed in consecutive `x` registers if they fit (`size/8 ≤ 8 − NGRN`), as if loaded by `ldr`s from an 8-aligned address; otherwise `NGRN` becomes 8 and it goes on the stack. A composite is never split between registers and stack.
 8. **Stack**: `NSAA` rounded to max(8, natural alignment), arguments smaller than 8 bytes occupy 8-byte slots.
 
-Unused bits in a register or slot are unspecified: callees must not assume that a `char` argument arrives sign- or zero-extended. AAPCS64 leaves them unspecified (Apple's arm64 variant, which requires caller extension, is the exception and does not apply here). We extend at the caller anyway, because it is nearly free and protects callees compiled by less careful compilers, and we always re-extend at the callee.
+Unused bits in a register or slot are unspecified: callees must not assume that a `char` argument arrives sign- or zero-extended. AAPCS64 leaves them unspecified (Apple's arm64 variant, which requires caller extension, is the exception and does not apply here). We extend at the caller anyway, because it is nearly free and protects callees compiled by less careful compilers, and we re-extend at the callee, except at `-O2` in internal-linkage functions whose address never escapes, where every caller is ours (Q-17).
 
 `_Complex float` and `_Complex double` are HFAs of two members. `_Complex long double` is `_Complex double`.
 
@@ -108,6 +108,6 @@ A call to an import *not* declared dllimport is emitted as a direct `bl GetLastE
 
 Global and static objects are aligned per Microsoft's table (sizes 2–7 → 4, 8–63 → 8, ≥ 64 → 16), which exceeds the C minimum and allows `ldp`/`stp` and `ldr q` access to larger objects; explicit `alignas` raises it further. Locals follow the smaller local table (> 4 bytes → 8). Struct layout follows [04-msvc-compatibility.md](04-msvc-compatibility.md) §2.
 
-## Open items from this document
+## Decisions
 
-Whether to drop callee-side re-extension at `-O2` for calls between `ncc`-compiled functions with internal linkage, where we control both sides (Q-17).
+Callee re-extension skipped at `-O2` only for non-escaping internal-linkage functions (Q-17).

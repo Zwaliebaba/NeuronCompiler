@@ -22,7 +22,7 @@ Non-bit-field members follow the standard rule: each member at the next offset a
 
 **Microsoft anonymous members.** `struct S { struct T; };` with a previously declared tagged type and no declarator embeds `T`'s members anonymously (the `-fms-extensions` behaviour). Accepted in compatibility mode because some SDK headers rely on it when `NONAMELESSUNION` is not defined.
 
-**Empty structs.** MSVC C rejects empty structs (C2016); the GNU extension gives them size 0, and C23 still makes them a constraint violation. We reject them in strict mode and, under `/Qgnu-ext`, accept them with size 0. There is no MSVC precedent to be compatible with, so the only question is whether to accept them at all (Q-10).
+**Empty structs.** MSVC C rejects empty structs (C2016); the GNU extension gives them size 0, and C23 still makes them a constraint violation. We always reject them, with no switch to accept them (Q-10).
 
 The layout engine is a single function with a table-driven test suite: for each generated struct, `cl /d1reportSingleClassLayout`-equivalent information is obtained by compiling a probe TU with `cl` that emits `sizeof`, `_Alignof` and `offsetof` (and bit offsets via union-punning) for every member, and the same TU is compiled with `ncc`; the outputs must be identical ([14-testing-strategy.md](14-testing-strategy.md) §4).
 
@@ -35,7 +35,7 @@ The layout engine is a single function with a table-driven test suite: for each 
 | `__inline`, `__forceinline` | **MSVC inline semantics, not C23 `inline`**: a referenced, non-inlined definition is emitted as an external COMDAT with `SELECT_ANY`. The UCRT's `_CRT_STDIO_INLINE` `printf` family depends on this; C23 semantics would leave `printf` undefined at link time. `__forceinline` additionally sets the always-inline attribute. |
 | `__cdecl`, `__stdcall`, `__fastcall`, `__vectorcall`, `__thiscall`, `__clrcall` | Parsed and ignored (MSVC also ignores them on ARM64). |
 | `__unaligned` | Type qualifier. No codegen effect on ARM64 since Windows enables hardware misalignment handling for normal memory, but it participates in type compatibility and is preserved for diagnostics. |
-| `__ptr32`, `__ptr64`, `__sptr`, `__uptr`, `__w64` | `__ptr64` and `__w64` are no-ops; `__ptr32` produces a 32-bit pointer type (sign- or zero-extended on conversion), needed only for a handful of WOW64-related declarations. |
+| `__ptr32`, `__ptr64`, `__sptr`, `__uptr`, `__w64` | `__ptr64` and `__w64` are no-ops; `__ptr32` is parsed and accepted in declarations; 32-bit pointer semantics (sign- or zero-extended on conversion) are implemented only if a header used in practice needs them (Q-12). |
 | `__restrict` | Same as `restrict`. |
 | `__alignof` | Same as `alignof`. |
 | `__FUNCTION__`, `__FUNCDNAME__`, `__FUNCSIG__`, `__COUNTER__`, `__TIMESTAMP__` | As MSVC. |
@@ -69,7 +69,7 @@ The intrinsic table is `src/sema/intrinsics.def`: name, signature, attributes, a
 1. **Required by common SDK inline functions and macros**: `__readx18byte/word/dword/qword` (used by `NtCurrentTeb()` and `GetCurrentThreadId`-style inline code), `__writex18*`, `__addx18*`, `__incx18*`, `_ReadStatusReg`, `_WriteStatusReg`, `__getReg`, `__dmb`/`__dsb`/`__isb` with the `_ARM64_BARRIER_*` constants, `__yield`, `__nop`, `__debugbreak` (`brk #0xF000`), `__fastfail` (`brk #0xF003` with code in `x0`), `_ReadWriteBarrier`, `_ReturnAddress`, `_AddressOfReturnAddress`, `__va_start`, `_alloca`.
 2. **Interlocked family**: `_InterlockedAdd`, `And`, `Or`, `Xor`, `Exchange`, `ExchangeAdd`, `CompareExchange`, `CompareExchange128`, `Increment`, `Decrement`, `ExchangePointer`, `CompareExchangePointer`, `_interlockedbittestandset`/`reset`, each in 8/16/32/64-bit forms and `_acq`, `_rel`, `_nf` ordering variants. These lower to the same IR atomic operations as `<stdatomic.h>` with the corresponding memory order (`_nf` = relaxed, plain = sequentially consistent, which on ARM64 MSVC means a full barrier after the operation).
 3. **Bit and arithmetic**: `_BitScanForward/Reverse(64)`, `_CountLeadingZeros(64)`, `_CountLeadingOnes`, `_CountLeadingSigns`, `_CountOneBits(64)`, `_byteswap_ushort/ulong/uint64`, `_rotl`, `_rotr`, `_rotl64`, `_rotr64`, `__mulh`, `__umulh`, `_bittest(64)` and variants, `_CopyDoubleFromInt64` and friends, `__iso_volatile_load8/16/32/64`, `__iso_volatile_store*`, `__prefetch`, `__crc32*` (with `+crc`).
-4. **NEON** (`arm64_neon.h`): implemented in bulk as table entries mapping directly to MIR vector instructions, after v1. Our own `<arm_neon.h>` (ACLE names, `vaddq_s32` etc.) is a later, separate decision (Q-11).
+4. **NEON** (`arm64_neon.h`): implemented in bulk as table entries mapping directly to MIR vector instructions, after v1. Our own `<arm_neon.h>` (ACLE names, `vaddq_s32` etc.) follows after that, mapped onto the same tables (Q-11).
 
 ## 6. Predefined macros (compatibility mode)
 
@@ -95,6 +95,6 @@ The intrinsic table is `src/sema/intrinsics.def`: name, signature, attributes, a
 
 Objects carry `.drectve` directives the way `cl` objects do: `/DEFAULTLIB:` for the selected CRT (`msvcrt`/`libcmt` and debug variants), `oldnames`, and `libncrt`; `/EXPORT:` for `dllexport`; `/FAILIFMISMATCH:` for `#pragma detect_mismatch`; `/ALTERNATENAME:` where we need weak defaults (for example, a default `__ncrt_printf_hook`). The `@feat.00` absolute symbol is emitted with the feature bits matching the compiled options (`/GS`, `/guard:cf`), as MSVC does, because `link.exe` uses it to decide whether an image can be marked CFG-compatible. `@comp.id` (the Rich-header product id) is not emitted; we have no registered product id and `link.exe` does not require it.
 
-## Open items from this document
+## Decisions
 
-Empty-struct size (Q-10); whether to ship ACLE `<arm_neon.h>` (Q-11); whether `__ptr32` is worth implementing at all (Q-12).
+Empty structs always rejected (Q-10); ACLE `<arm_neon.h>` post-v1 (Q-11); `__ptr32` parsed, implemented on demand (Q-12).

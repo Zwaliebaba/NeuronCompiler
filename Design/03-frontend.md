@@ -4,7 +4,7 @@
 
 Files are read whole into the session arena and never modified. A source location is a 32-bit offset into a global, monotonically assigned location space (each file inclusion and each macro expansion gets a range), in the style of Clang. A location therefore identifies file, line, column and the full macro-expansion and include stack without storing any of it per token. Line tables are built lazily per file the first time a diagnostic or debug line record needs them.
 
-Input encoding is UTF-8, with BOM accepted and skipped. UTF-16 source files (still found in some Windows projects, notably `.rc`-adjacent headers) are transcoded on load when a UTF-16 BOM is present. The execution character set is UTF-8 for narrow strings, UTF-16 for `wchar_t` (MSVC ABI: 16-bit `wchar_t`) and for `u""`, UTF-32 for `U""`. Narrow string literals are emitted as UTF-8 bytes regardless of the system code page, which matches `cl /utf-8`; we will not emulate the code-page-dependent default.
+Input encoding is UTF-8, with BOM accepted and skipped. UTF-16 source files (still found in some Windows projects, notably `.rc`-adjacent headers) are transcoded on load when a UTF-16 BOM is present; without a BOM no detection is attempted (Q-08). The execution character set is UTF-8 for narrow strings, UTF-16 for `wchar_t` (MSVC ABI: 16-bit `wchar_t`) and for `u""`, UTF-32 for `U""`. Narrow string literals are emitted as UTF-8 bytes regardless of the system code page, which matches `cl /utf-8`; we will not emulate the code-page-dependent default.
 
 ## 2. Lexer
 
@@ -99,6 +99,6 @@ Standard attributes map to semantic flags: `nodiscard` and `deprecated` produce 
 
 Every C23 constraint violation has a diagnostic id and a test. Warnings include the usual set (implicit conversion loss, sign comparison, unused, shadowing, format-string checking against the C23 `printf` grammar, implicit fallthrough, missing `return`), each individually controllable with `/wd`, `/we`, `/w1`…`/w4`-compatible levels. In system headers (those found via `INCLUDE` or the compiler directory) warnings are suppressed and MSVC extensions are accepted silently; in user code, MSVC extensions produce a pedantic warning under `/permissive-`.
 
-## Open items from this document
+## Decisions
 
-Whether to support legacy UTF-16 source (Q-08); whether `/Qcommon` should default on for drop-in MSVC object compatibility (Q-09).
+UTF-16 source accepted with a BOM (Q-08); ISO tentative-definition semantics by default, `/Qcommon` opt-in (Q-09).

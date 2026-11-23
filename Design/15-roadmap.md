@@ -25,12 +25,12 @@ Each phase has an exit criterion that is a test result, not a judgement.
 **Phase 4 — MSVC compatibility breadth.** `windows.h` and every public SDK C header; MSVC layout rules verified by the generated cross-check; intrinsic groups 1–3; TLS; dllimport/dllexport; `#pragma` coverage; MSBuild toolset and CMake toolchain file.
 *Exit:* every public header in the Windows SDK `um` and `shared` directories compiles in isolation; nightly ABI cross-check (≥ 10,000 generated cases) green; curl and the SDK Win32 samples build and run.
 
-Phases 3 and 4 are independent and can run in parallel if there are two streams of work.
+Phases 3 and 4 are independent. With the agreed way of working (Claude implements, you review; Q-02) they run sequentially by default; they can overlap if review throughput allows.
 
 **Phase 5 — Optimiser.** SSA construction, the `-O1` and `-O2` pipelines (§05), SSA linear-scan allocation, post-RA passes, optimised-code CodeView (location ranges, inline sites).
 *Exit:* bootstrap fixed point at `-O2`; 10 million Csmith/YARPGen programs with no `-O0`/`-O2` divergence; benchmark geometric mean ≤ 1.4× `cl /O2`; debugger `-O2` suite green.
 
-**Phase 6 — v1.0.** SEH (`__try`/`__except`/`__finally`), `/GS`, `/guard:cf`, packaging (installer or zip with `ncc.exe`, `include/ncc`, `libncrt` variants, MSBuild props, natvis), documentation, seed-binary release process.
+**Phase 6 — v1.0.** SEH (`__try`/`__except`/`__finally`, in v1.0 per Q-20; requires Q-19 resolved first), `/GS`, `/guard:cf`, packaging (installer or zip with `ncc.exe`, `include/ncc`, `libncrt` variants, MSBuild props, natvis), documentation, seed-binary release process.
 *Exit:* real-world corpus green at `-O0` and `-O2`; release candidate builds itself from the previous release and from Clang.
 
 **After v1** (candidates, unordered): NEON intrinsics (`arm64_neon.h`, then ACLE `arm_neon.h`); shrink-wrapping and function fragments; pre-RA scheduling; PCH; decimal floating point; `_Float128`; ARMv9 features (SVE is not supported by Windows user mode today, so not a priority); kernel-mode code generation; in-process parallel codegen.

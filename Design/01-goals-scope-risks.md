@@ -34,7 +34,7 @@ The secondary goals, in priority order, are: correctness that is demonstrable ra
 
 ## 3. Target platform
 
-The target is user-mode Windows 11 on Arm, ARMv8.0-A with FP and Advanced SIMD as the guaranteed baseline (the documented Windows ARM64 minimum). Optional extensions (LSE atomics, CRC32, crypto, FP16, RCPC, dot product) are opt-in via `/arch:` style switches, never assumed. Kernel-mode code generation is a later possibility but not a v1 goal; the design avoids precluding it (no red-zone use beyond the 16 bytes Windows guarantees, `x18` never touched, `__chkstk` probing always emitted).
+The target is user-mode Windows 11 on Arm with **ARMv8.1-A** (FP, Advanced SIMD and LSE atomics) as the default baseline (Q-06). The documented Windows ARM64 minimum is ARMv8.0, but to our knowledge every CPU on Windows 11's supported hardware list implements LSE (to verify against Microsoft's processor list); code built for the default baseline faults on an ARMv8.0-only CPU. `/arch:armv8.0` remains available and uses LL/SC atomic sequences. Further extensions (CRC32, crypto, FP16, RCPC, dot product) are opt-in via `/arch:` style switches, never assumed. Kernel-mode code generation is a later possibility but not a v1 goal; the design avoids precluding it (no red-zone use beyond the 16 bytes Windows guarantees, `x18` never touched, `__chkstk` probing always emitted).
 
 ## 4. Non-goals
 
@@ -50,7 +50,7 @@ The design's weakest points, ranked by how likely they are to hurt the schedule 
 
 **R3 — Self-hosting in C makes the optimiser expensive to write.** Without templates, generic containers and pattern-matching DSLs become macros or code generators. Mitigation: invest in the core library first (D-07: X-macro tables, typed vector/hash macros with tested implementations) and keep the IR deliberately small. Likelihood high, impact medium.
 
-**R4 — The UCRT gap is larger than it looks.** Formatted I/O cannot be patched from outside: C23 `printf` adds `%b`, `%wN`, `%wfN`, and the UCRT formatter will not grow them for us. Mitigation: `libncrt` owns a full C23 formatter and the `stdio.h` overlay routes to it in conformance mode ([11-runtime-and-headers.md](11-runtime-and-headers.md)). This is a real cost (a correct `printf`/`scanf` including float formatting is several thousand lines) and an open question whether it is default. Likelihood certain, impact medium.
+**R4 — The UCRT gap is larger than it looks.** Formatted I/O cannot be patched from outside: C23 `printf` adds `%b`, `%wN`, `%wfN`, and the UCRT formatter will not grow them for us. Mitigation: `libncrt` owns a full C23 formatter and the `stdio.h` overlay routes to it in conformance mode ([11-runtime-and-headers.md](11-runtime-and-headers.md)). This is a real cost (a correct `printf`/`scanf` including float formatting is several thousand lines), and it is the default under `/std:c23` (Q-03). Likelihood certain, impact medium.
 
 **R5 — Optimiser semantics versus MSVC-era code.** MSVC has never exploited strict aliasing and Windows code freely type-puns. A strict-aliasing optimiser will miscompile real code that "works with MSVC". Mitigation: type-based alias analysis off by default, enabled by `/Qstrict-aliasing`; `char` signed (MSVC convention, not AAPCS64); `volatile` with ISO semantics (matches MSVC's ARM64 default `/volatile:iso`). Likelihood high if ignored, impact high.
 
@@ -60,6 +60,6 @@ The design's weakest points, ranked by how likely they are to hurt the schedule 
 
 **R8 — Stage-0 dependency.** MSVC `cl /std:clatest` does not implement enough of C23 to build us. Mitigation: a restricted implementation dialect ([13-self-hosting-bootstrap.md](13-self-hosting-bootstrap.md)) buildable by Clang ≥ 19 and GCC ≥ 14, plus a published seed binary once we self-host. Likelihood certain, impact low.
 
-## Open items from this document
+## Decisions and open items
 
-Whether conformance mode routes `printf` to `libncrt` by default (Q-03); whether `BITINT_MAXWIDTH` should match clang (Q-05); whether the baseline should move to ARMv8.1 for LSE atomics (Q-06). See [16-open-questions.md](16-open-questions.md).
+Decided: C23 formatted I/O on by default (Q-03), `BITINT_MAXWIDTH` 65535 (Q-05), ARMv8.1 baseline (Q-06), decimal FP deferred (Q-04), kernel mode not in v1 (Q-07). Remaining check: confirm that Windows 11's supported CPUs all implement LSE. See [16-open-questions.md](16-open-questions.md).

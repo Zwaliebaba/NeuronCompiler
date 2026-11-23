@@ -36,7 +36,7 @@ IR generation walks the typed AST of one function. At `-O0` and as the input to 
 
 **Calling-convention lowering happens here**, not in the back end. IRGen classifies each parameter and return value per [07-windows-arm64-abi.md](07-windows-arm64-abi.md) and produces a NIR function signature in terms of scalar machine types plus explicit hidden pointers: an HFA of three `double`s becomes three `f64` parameters, a 24-byte struct becomes a `ptr` to a caller-made copy, a `struct` return larger than 16 bytes becomes a `ptr` parameter marked `sret` (assigned to `x8`). The back end then only has to assign NIR parameters to registers in order, which is trivial and makes the ABI auditable in one place. The cost, accepted, is that NIR is ARM64-Windows-specific; D-05 says that is fine.
 
-C semantics that IRGen makes explicit: integer promotions and conversions; `_Bool` normalisation on store; bit-field access as load/shift/mask/store sequences on the allocation unit (MSVC unit size, §04); `volatile` accesses; sequence-point-free evaluation order (we choose left-to-right for function arguments and operands, documented as implementation behaviour); VLA size computation and `dynalloca` with stack probing; `setjmp` call sites marked `returns_twice`; `_BitInt` arithmetic as `iN` operations; complex arithmetic expanded inline, with `__muldc3`/`__divdc3`-style runtime calls for the Annex G-correct multiplication and division unless `CX_LIMITED_RANGE` is on.
+C semantics that IRGen makes explicit: integer promotions and conversions; `_Bool` normalisation on store; bit-field access as load/shift/mask/store sequences on the allocation unit (MSVC unit size, §04); `volatile` accesses; sequence-point-free evaluation order (left-to-right for function arguments and operands, documented as implementation behaviour (Q-14)); VLA size computation and `dynalloca` with stack probing; `setjmp` call sites marked `returns_twice`; `_BitInt` arithmetic as `iN` operations; complex arithmetic expanded inline, with `__muldc3`/`__divdc3`-style runtime calls for the Annex G-correct multiplication and division unless `CX_LIMITED_RANGE` is on.
 
 `switch` statements become NIR `switch`; the back end decides between jump table, binary search and bit tests.
 
@@ -81,7 +81,7 @@ These are deliberate positions, and they matter more than the pass list for whet
 
 **`volatile`.** ISO semantics: every access performed, exactly once, in program order relative to other volatile accesses, with no implied barriers. This matches MSVC's ARM64 default (`/volatile:iso`). `/volatile:ms` (acquire/release on volatile) is provided because some MSVC-era code assumes it.
 
-**Memory model.** C23 atomics with the C/C++ memory model. Lowering to ARM64 follows the standard mapping (LDAR/STLR for acquire/release loads and stores, LDAXR/STLXR loops or LSE `CAS`/`LDADD`… with `+lse`, `DMB ISH` for `seq_cst` fences). The optimiser may not move non-atomic accesses across acquire/release operations in the forbidden directions and treats `seq_cst` as a full barrier.
+**Memory model.** C23 atomics with the C/C++ memory model. Lowering to ARM64 follows the standard mapping (LDAR/STLR for acquire/release loads and stores, LSE `CAS`/`CASP`/`LDADD`/`LDCLR`/`LDSET`/`LDEOR`/`SWP` with the matching `A`/`L`/`AL` ordering suffix by default, `CAS` loops for operations without a direct LSE form, LDAXR/STLXR loops only under `/arch:armv8.0`, `DMB ISH` for `seq_cst` fences). The optimiser may not move non-atomic accesses across acquire/release operations in the forbidden directions and treats `seq_cst` as a full barrier.
 
 **`[[unsequenced]]` and `[[reproducible]]`** are trusted: a call to an `[[unsequenced]]` function with identical arguments may be CSE'd and hoisted; `[[reproducible]]` calls may be CSE'd if no intervening store may alias.
 
@@ -93,6 +93,6 @@ Dominator tree (Cooper–Harvey–Kennedy iterative algorithm, sufficient at our
 
 Before instruction selection, `iN` operations with N > 128 are expanded into loops or unrolled sequences over 64-bit limbs (add/sub with carry via `adds`/`adcs`, multiplication by schoolbook limb products for N ≤ 512 and a runtime call above that, division and remainder always via `__ncrt_udivmodbi`/`__ncrt_sdivmodbi` in `libncrt`). Widths between 65 and 128 use `i128`, legalised to register pairs by the back end. Non-power-of-two widths ≤ 128 are kept in the next container type with explicit re-extension after each operation, because AAPCS64 leaves the padding bits unspecified ([07-windows-arm64-abi.md](07-windows-arm64-abi.md) §5).
 
-## Open items from this document
+## Decisions
 
-Whether `-O2` should default to TBAA on in `/std:c23 /permissive-` mode for new code (Q-13); left-to-right argument evaluation versus MSVC's actual order (Q-14).
+Type-based aliasing is never on by default in any mode (Q-13); argument evaluation is left-to-right (Q-14).

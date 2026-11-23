@@ -27,7 +27,7 @@ The conformance matrix (`tests/conformance/MATRIX.md`, generated) lists every C2
 * Our own clause-by-clause tests, written alongside each feature (positive and constraint-violation cases).
 * The `c-testsuite` corpus and the execution tests of the GCC torture suite (`gcc.c-torture/execute`, GPL test data used only as test input, not linked into anything we ship).
 * Tests adapted from Clang's `test/C/C23` and `test/Sema` C files (Apache-2.0 with LLVM exception), for C23 features specifically.
-* Commercial suites (Plum Hall, Perennial, SuperTest) if budget allows: they are the only independent conformance oracles and would be the strongest evidence for a "full C23" claim. Recommended before any external claim of conformance (Q-25).
+* Commercial suites (Plum Hall, Perennial, SuperTest): the only independent conformance oracles. They will be bought only if the project goes public, before any external conformance claim (Q-25). Until then the compiler is described as "implements C23", not "conforms to C23".
 
 ## 3. Execution environment
 
@@ -60,6 +60,6 @@ Projects chosen to stress different parts of the compiler and to have their own 
 
 Runtime: a benchmark set (SQLite speedtest1, Lua benchmarks, zstd compression, CoreMark, a subset of Embench and the integer and floating-point kernels from Polybench) measured against `cl /O2` on the same hardware; the target in [01-goals-scope-risks.md](01-goals-scope-risks.md) §1 is geometric mean ≤ 1.4× runtime. Compile time: `windows.h` empty TU, SQLite amalgamation at `-O0`/`-O2`, and the self-build, tracked per commit with regressions over 3% flagged.
 
-## Open items from this document
+## Decisions
 
-Commercial conformance suite (Q-25).
+Commercial conformance suite only if the project goes public (Q-25).

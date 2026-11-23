@@ -23,7 +23,7 @@
 | `/link ...` | Pass the rest to `link.exe` |
 | `/permissive-` | Pedantic warnings for MSVC extensions in user code |
 | `/arch:`, `/feature:` | Target features ([06-arm64-backend.md](06-arm64-backend.md) §8) |
-| `/Q...` | `ncc`-specific options: `/Qstrict-aliasing`, `/Qwrapv`, `/Qcommon`, `/Qmsc-version:`, `/Qpasses:`, `/Qdump-ir`, `/Qverify-unwind`, `/Qtime-report` |
+| `/Q...` | `ncc`-specific options: `/Qstrict-aliasing`, `/Qwrapv`, `/Qcommon`, `/Qucrt-stdio`, `/Qmsc-version:`, `/Qpasses:`, `/Qdump-ir`, `/Qverify-unwind`, `/Qtime-report` |
 
 ## 2. Environment discovery
 
@@ -50,7 +50,7 @@ A consequence is that a user `/I` directory containing its own `stdint.h` (commo
 
 **MSBuild / Visual Studio.** An MSBuild toolset definition (`ncc.props`/`ncc.targets`, installed per-user or per-solution via a `Directory.Build.props`) swaps `ClCompile`'s `ToolExe` and `ToolPath` to `ncc.exe` and filters a small number of `ClCompile` metadata items that would produce unsupported switches. Because the driver is `cl`-compatible and the diagnostics are MSVC-formatted, IntelliSense, the error list and incremental builds work without a custom task. `/sourceDependencies` JSON output (what MSBuild's tracker-free mode uses) is implemented so incremental builds know header dependencies.
 
-**CMake.** CMake identifies compilers by probing predefined macros. Because `ncc` defines `_MSC_VER`, CMake would identify it as MSVC and use MSVC flags, which mostly works. The cleaner path is a CMake toolchain file that sets `CMAKE_C_COMPILER` to `ncc.exe` and `CMAKE_C_COMPILER_ID` to `MSVC` with `CMAKE_C_COMPILER_FRONTEND_VARIANT` = `MSVC`, documented in the repository, until upstream CMake knows about `ncc` (Q-24).
+**CMake.** CMake identifies compilers by probing predefined macros. Because `ncc` defines `_MSC_VER`, CMake would identify it as MSVC and use MSVC flags, which mostly works. The cleaner path is a CMake toolchain file that sets `CMAKE_C_COMPILER` to `ncc.exe` and `CMAKE_C_COMPILER_ID` to `MSVC` with `CMAKE_C_COMPILER_FRONTEND_VARIANT` = `MSVC`, documented in the repository, until v1; a distinct upstream compiler id is proposed after v1 (Q-24).
 
 **Dependency output.** `/showIncludes` (MSVC format, for Ninja's `deps = msvc`) and `/sourceDependencies` are both implemented.
 
@@ -58,6 +58,6 @@ A consequence is that a user `/I` directory containing its own `stdint.h` (commo
 
 `file(line,col): error NC1234: message` and `warning NC4xxx`, plus caret snippets when the console supports it (not when `MSBUILD_*` environment indicates a build log). Error numbers are stable across releases.
 
-## Open items from this document
+## Decisions
 
-CMake upstream identification (Q-24).
+CMake toolchain file now, upstream compiler id after v1 (Q-24).

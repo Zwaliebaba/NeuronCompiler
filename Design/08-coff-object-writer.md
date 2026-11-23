@@ -15,7 +15,7 @@ The writer accumulates, during compilation, a list of *sections* (name, characte
 | Section | Characteristics | Content |
 |---------|-----------------|---------|
 | `.text$mn` | `CNT_CODE`, `MEM_EXECUTE`, `MEM_READ`, align 4 (16 for function entry under `/Qalign-functions`) | One COMDAT section per function (function-level linking, MSVC `/Gy` behaviour, always on). |
-| `.data` | `CNT_INITIALIZED_DATA`, `MEM_READ`, `MEM_WRITE` | Initialised writable data. Per-object COMDAT sections under `/Gw` (default at `-O2`). |
+| `.data` | `CNT_INITIALIZED_DATA`, `MEM_READ`, `MEM_WRITE` | Initialised writable data. Per-object COMDAT sections (`/Gw`), on by default at every optimisation level (Q-18); `/Gw-` disables. |
 | `.bss` | `CNT_UNINITIALIZED_DATA`, `MEM_READ`, `MEM_WRITE` | Zero-initialised data. |
 | `.rdata` | `CNT_INITIALIZED_DATA`, `MEM_READ` | Constants, string literals, `constexpr` objects with linkage. |
 | `.pdata` | `CNT_INITIALIZED_DATA`, `MEM_READ`, align 4 | Function table entries, one associative COMDAT per function. |
@@ -70,6 +70,6 @@ A PE image is relocatable, so `ADDR64` data relocations become base relocations 
 
 Every object produced by the test suite is checked by three independent readers: `llvm-readobj --file-headers --sections --relocations --symbols --unwind`, `dumpbin /all` (on Windows CI), and an in-house structural checker (`ncc-objcheck`) that validates invariants `link.exe` does not report clearly: every `.pdata` entry has an associative relationship with its function's section, every relocation's target range fits, no COMDAT is associated with a non-COMDAT, alignment fields match buffer requirements, and `.xdata` records parse under the unwind verifier ([09-unwind-and-seh.md](09-unwind-and-seh.md)). Final acceptance is always "`link.exe` links it and the program runs".
 
-## Open items from this document
+## Decisions
 
-Whether `/Gw` (data COMDATs) should be the default at all levels for `/OPT:REF` effectiveness (Q-18).
+`/Gw` data COMDATs on at all levels (Q-18).

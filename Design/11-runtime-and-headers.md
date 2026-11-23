@@ -20,13 +20,13 @@ These coexist with UCRT internals: `corecrt.h` and `vcruntime.h` also typedef `s
 
 | Header | C23 additions supplied |
 |--------|------------------------|
-| `<assert.h>` | Variadic `assert(...)` so commas in the expression work; expands to UCRT's `_wassert`. |
+| `<assert.h>` | Variadic `assert(...)` so commas in the expression work; expands to UCRT's `_wassert`. Applied in every language mode (Q-22). |
 | `<stdint.h>`, `<inttypes.h>` | `INTn_WIDTH`, `UINTn_WIDTH` and the other `*_WIDTH` macros; `__STDC_VERSION_*` macros. |
 | `<stdio.h>` | C23 formatted I/O (§4); `__STDC_VERSION_STDIO_H__`. |
 | `<stdlib.h>` | `strfromd`/`strfromf`/`strfroml`, `free_sized`, `free_aligned_sized`, `memalignment`, `once_flag`/`call_once` if missing, `__STDC_VERSION_STDLIB_H__`. `aligned_alloc`: see §6. |
 | `<string.h>` | `memset_explicit` (never elided: implemented out of line with a compiler barrier), `strdup`, `strndup`, `memccpy` under their ISO names without `_CRT_NONSTDC` deprecation, `__STDC_VERSION_STRING_H__`. |
 | `<time.h>` | `timegm` (→ `_mkgmtime64`), `gmtime_r` and `localtime_r` (→ `gmtime_s`/`localtime_s` with the arguments swapped and the return convention adapted), `timespec_getres`, `TIME_MONOTONIC` etc. if missing. |
-| `<math.h>` | The C23 additions (from TS 18661): `exp10`, `exp2m1`, `expm1`-family completions, `log10p1`, `log2p1`, `rootn`, `rsqrt`, `compoundn`, `pown`, `powr`, `sinpi`/`cospi`/`tanpi` and inverse forms, `fmaximum`/`fminimum` and `_num`/`_mag` variants, `nextup`/`nextdown`, `roundeven`, `fromfp`/`ufromfp` families, `canonicalize`, `iscanonical`, `issignaling`, `iszero`, `issubnormal`, `iseqsig`, `FP_INT_*` macros. Implemented in `libncrt`, preferring correctly rounded algorithms (CORE-MATH, MIT-licensed, where available) and otherwise ports from musl (MIT). |
+| `<math.h>` | The C23 additions (from TS 18661): `exp10`, `exp2m1`, `expm1`-family completions, `log10p1`, `log2p1`, `rootn`, `rsqrt`, `compoundn`, `pown`, `powr`, `sinpi`/`cospi`/`tanpi` and inverse forms, `fmaximum`/`fminimum` and `_num`/`_mag` variants, `nextup`/`nextdown`, `roundeven`, `fromfp`/`ufromfp` families, `canonicalize`, `iscanonical`, `issignaling`, `iszero`, `issubnormal`, `iseqsig`, `FP_INT_*` macros. Implemented in `libncrt` from CORE-MATH (correctly rounded, MIT) where available, otherwise ports from musl (MIT), with attribution in `runtime/THIRD_PARTY.md` (Q-23). |
 | `<fenv.h>` | `femode_t`, `fegetmode`/`fesetmode`, `FE_DFL_MODE`, `fesetexcept`, `fetestexceptflag`, `FE_TONEAREST`-family values consistent with FPCR `RMode`. |
 | `<uchar.h>` | `char8_t`, `mbrtoc8`/`c8rtomb` if missing. |
 | `<threads.h>` | Only if the probe finds the UCRT version incomplete. |
@@ -39,7 +39,7 @@ C23 extends `printf`/`scanf` with `%b`/`%B`, `%wN` and `%wfN` length modifiers (
 
 The design uses a property of those headers: defining `_NO_CRT_STDIO_INLINE` turns `printf` and family into plain external declarations. Our `<stdio.h>` overlay, in C23 conformance mode, defines `_NO_CRT_STDIO_INLINE` before `#include_next` and `libncrt` provides external definitions of the whole `printf`/`scanf` family (narrow and wide, `v`-, `s`-, `sn`-, `f`-variants). The UCRT import and static libraries do not define the plain names (that is what `legacy_stdio_definitions.lib` exists for), so there should be no ambiguity at link time; the probe suite confirms this per SDK, and fails loudly if a project also links `legacy_stdio_definitions.lib`. Our implementation writes and reads through the UCRT `FILE` object using the UCRT's own locking primitives (`_lock_file`/`_fwrite_nolock`…), so output from `ncc` code and from `cl` code in the same process interleaves correctly on the same stream. Floating-point formatting uses a shortest-round-trip and fixed-precision algorithm (Ryū and Ryū-printf) to be exact; parsing reuses the compiler's own correctly rounded decimal converter from `core`.
 
-This is the most expensive item in `libncrt` (an estimated 4–6k lines including tests) and the main reason for open question Q-03: whether this formatter is the default under `/std:c23`, or opt-in, with the UCRT formatter (no `%b`, otherwise C17-conforming) as default.
+This is the most expensive item in `libncrt` (an estimated 4–6k lines including tests). It is the default under `/std:c23` (Q-03); `/Qucrt-stdio` opts out and leaves the UCRT inline formatter in place (no `%b`, otherwise C17-level). In `/std:c17` and `/std:c11` modes the UCRT formatter is the default.
 
 ## 5. Complex numbers
 
@@ -69,6 +69,6 @@ Half-precision conversion (`fcvt` between `h` and `s`/`d` registers) is in the A
 
 `libncrt` is written in C23 and compiled by `ncc` itself (stage 1 onward), which makes it a permanent dogfooding target. It ships in four variants matching the CRT selection: `libncrt.lib` (`/MT`), `libncrtd.lib` (`/MTd`), `libncrt_md.lib` (`/MD`), `libncrt_mdd.lib` (`/MDd`), because UCRT references differ between static linking and DLL import (`__imp_` symbols). The driver's `.drectve` default-library entry selects the matching one. It has no dependency other than the UCRT, vcruntime and `kernel32`.
 
-## Open items from this document
+## Decisions
 
-Default for C23 formatted I/O (Q-03); whether `assert` overlay should be on unconditionally (Q-22); source and licence of math algorithms (Q-23).
+C23 formatted I/O on by default under `/std:c23` (Q-03); variadic `assert` always (Q-22); math from CORE-MATH, then musl (Q-23).
