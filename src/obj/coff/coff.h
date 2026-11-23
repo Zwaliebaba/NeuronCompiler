@@ -10,8 +10,12 @@
 // clang-format off: PE/COFF specification values, aligned by hand (AGENTS.md §4)
 enum {
     IMAGE_FILE_MACHINE_ARM64 = 0xAA64,
+};
 
-    /* Section characteristics */
+/* Section characteristics: a 32-bit flag set that reaches 0x80000000, so the
+   enum is fixed at u32 rather than left to the ABI, which makes it int under
+   MSVC and unsigned elsewhere (Design/13 §1). */
+enum : u32 {
     IMAGE_SCN_CNT_CODE               = 0x00000020,
     IMAGE_SCN_CNT_INITIALIZED_DATA   = 0x00000040,
     IMAGE_SCN_CNT_UNINITIALIZED_DATA = 0x00000080,
@@ -23,7 +27,9 @@ enum {
     IMAGE_SCN_MEM_EXECUTE            = 0x20000000,
     IMAGE_SCN_MEM_READ               = 0x40000000,
     IMAGE_SCN_MEM_WRITE              = 0x80000000,
+};
 
+enum {
     /* Symbol storage classes */
     IMAGE_SYM_CLASS_EXTERNAL = 2,
     IMAGE_SYM_CLASS_STATIC   = 3,
