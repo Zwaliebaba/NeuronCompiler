@@ -21,9 +21,12 @@
 
 enum
 {
-  REF_KEYS = 4096,
-  NO_VALUE = 0xFFFFFFFFu
+  REF_KEYS = 4096
 };
+
+/* Not an enumerator: under the MSVC ABI every enum is int, so 0xFFFFFFFF would
+   be -1 there and unsigned elsewhere (Design/13 §1). */
+static const u32 NO_VALUE = UINT32_MAX;
 
 static u64 g_rng = 0x9E3779B97F4A7C15ull; /* deterministic: the test must not depend on the run */
 
