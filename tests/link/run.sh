@@ -40,6 +40,20 @@ check "lld-link links the no-CRT program" \
 check "ncc-uwcheck: every unwind record in the linked image checks out" \
     "$BUILD/ncc-uwcheck" --strict "$OUT/p0_nocrt.exe"
 
+# Unwind data from an independent producer: clang-compiled code (including
+# frame forms ncc never emits, such as unchained leaves) linked into the same
+# image. The checker may skip forms it does not model but must never fail one.
+if clang --target=aarch64-pc-windows-msvc -O2 -fno-stack-protector -c tests/link/foreign.c \
+        -o "$OUT/foreign.obj" 2>/dev/null; then
+    check "lld-link links ncc and clang objects together" \
+        lld-link /machine:arm64 /entry:p0_start /subsystem:console /opt:noref \
+        /libpath:"$OUT" /out:"$OUT/mixed.exe" "$OUT/p0_nocrt.obj" "$OUT/foreign.obj"
+    check "ncc-uwcheck: clang-generated unwind data checks out (skips allowed, no failures)" \
+        "$BUILD/ncc-uwcheck" "$OUT/mixed.exe"
+else
+    echo "  skip  clang cannot target aarch64-pc-windows-msvc; mixed-image check skipped"
+fi
+
 readobj_clean() { ! llvm-readobj "$@" 2>&1 | grep -qiE "warning|error"; }
 check "image headers parse" readobj_clean --file-headers --sections "$OUT/p0_nocrt.exe"
 check "unwind data parses without warnings" readobj_clean --unwind "$OUT/p0_nocrt.exe"

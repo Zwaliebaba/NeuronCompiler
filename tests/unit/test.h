@@ -33,6 +33,7 @@ extern int test_checks;
 void test_core(void);
 void test_logical_imm(void);
 void test_encode_differential(void);
+void test_encode_symbolic(void);
 void test_unwind(void);
 void test_coff(void);
 void test_module(void);

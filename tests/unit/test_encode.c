@@ -7,6 +7,7 @@
 #include "test.h"
 
 #include "../../src/core/vec.h"
+#include "../../src/obj/coff/coff.h"
 #include "../../src/target/arm64/a64.h"
 
 #include <stdlib.h>
@@ -374,4 +375,103 @@ void test_logical_imm(void) {
     CHECK(!a64_encode_logical_imm(0x1234, 64, &n, &r, &s));
     CHECK(!a64_encode_logical_imm(0x100000000ull, 32, &n, &r, &s));
     CHECK(a64_encode_logical_imm(0xFF, 32, &n, &r, &s) && n == 0 && r == 0 && s == 7);
+}
+
+/* ---- symbol-operand forms ------------------------------------------------
+ * The differential test above only covers instructions without symbols,
+ * because llvm-mc -show-encoding prints fixup bits as placeholders. This one
+ * assembles the symbolic forms into a COFF object with llvm-mc and compares
+ * the instruction words and relocation types with ours. It exists because
+ * the first Windows CI run found that `add ..., :secrel_hi12:sym` lacked the
+ * lsl #12 bit: link.exe rejected it (LNK2040), lld-link did not. */
+
+static const char *const reloc_names[] = {
+    [IMAGE_REL_ARM64_PAGEBASE_REL21] = "IMAGE_REL_ARM64_PAGEBASE_REL21",
+    [IMAGE_REL_ARM64_REL21] = "IMAGE_REL_ARM64_REL21",
+    [IMAGE_REL_ARM64_PAGEOFFSET_12A] = "IMAGE_REL_ARM64_PAGEOFFSET_12A",
+    [IMAGE_REL_ARM64_PAGEOFFSET_12L] = "IMAGE_REL_ARM64_PAGEOFFSET_12L",
+    [IMAGE_REL_ARM64_SECREL_LOW12A] = "IMAGE_REL_ARM64_SECREL_LOW12A",
+    [IMAGE_REL_ARM64_SECREL_HIGH12A] = "IMAGE_REL_ARM64_SECREL_HIGH12A",
+    [IMAGE_REL_ARM64_SECREL_LOW12L] = "IMAGE_REL_ARM64_SECREL_LOW12L",
+    [IMAGE_REL_ARM64_BRANCH26] = "IMAGE_REL_ARM64_BRANCH26",
+    [IMAGE_REL_ARM64_BRANCH19] = "IMAGE_REL_ARM64_BRANCH19",
+    [IMAGE_REL_ARM64_BRANCH14] = "IMAGE_REL_ARM64_BRANCH14",
+};
+
+static const char *sym_cb(void *ctx, u32 sym) { (void)ctx; (void)sym; return "ext_sym"; }
+
+void test_encode_symbolic(void) {
+    if (!test_have_tool("llvm-mc") || !test_have_tool("llvm-objdump")) {
+        fprintf(stderr, "encode_symbolic: SKIPPED (llvm-mc or llvm-objdump not found)\n");
+        return;
+    }
+    const MInst cases[] = {
+        {.op = A64_ADRP, .rd = 8, .tkind = TK_SYM},
+        {.op = A64_ADR, .rd = 3, .tkind = TK_SYM},
+        {.op = A64_ADDXri, .rd = 1, .rn = 1, .tkind = TK_SYM},
+        {.op = A64_ADDXri, .rd = 8, .rn = 8, .tkind = TK_SYM, .smod = SM_SECREL_HI12},
+        {.op = A64_ADDXri, .rd = 8, .rn = 8, .tkind = TK_SYM, .smod = SM_SECREL_LO12},
+        {.op = A64_LDRXui, .rd = 16, .rn = 16, .tkind = TK_SYM},
+        {.op = A64_LDRWui, .rd = 9, .rn = 9, .tkind = TK_SYM},
+        {.op = A64_STRXui, .rd = 2, .rn = 5, .tkind = TK_SYM},
+        {.op = A64_LDRBBui, .rd = 2, .rn = 5, .tkind = TK_SYM},
+        {.op = A64_LDRWui, .rd = 9, .rn = 8, .tkind = TK_SYM, .smod = SM_SECREL_LO12},
+        {.op = A64_STRWui, .rd = 0, .rn = 8, .tkind = TK_SYM, .smod = SM_SECREL_LO12},
+        {.op = A64_BL, .tkind = TK_SYM},
+        {.op = A64_B, .tkind = TK_SYM},
+        {.op = A64_Bcc, .shift = CC_NE, .tkind = TK_SYM},
+        {.op = A64_CBZX, .rd = 4, .tkind = TK_SYM},
+        {.op = A64_TBNZ, .rd = 4, .imm = 7, .tkind = TK_SYM},
+    };
+    u32 n = NC_ARRAY_LEN(cases);
+    const char *dir = test_tmpdir();
+    char s_path[512], o_path[512], d_path[512], cmd[4096];
+    snprintf(s_path, sizeof s_path, "%s/ncc-test-sym.s", dir);
+    snprintf(o_path, sizeof o_path, "%s/ncc-test-sym.obj", dir);
+    snprintf(d_path, sizeof d_path, "%s/ncc-test-sym.dis", dir);
+    FILE *f = fopen(s_path, "w");
+    CHECK(f != nullptr);
+    if (!f) return;
+    u32 words[32];
+    u16 rtypes[32];
+    char text[256];
+    for (u32 i = 0; i < n; i++) {
+        words[i] = a64_encode(&cases[i], 0, &rtypes[i]);
+        a64_format(text, sizeof text, &cases[i], 0, sym_cb, nullptr);
+        fprintf(f, "\t%s\n", text);
+    }
+    fclose(f);
+    snprintf(cmd, sizeof cmd,
+             "llvm-mc -triple=aarch64-pc-windows-msvc -filetype=obj %s -o %s && "
+             "llvm-objdump -dr %s > %s",
+             s_path, o_path, o_path, d_path);
+    CHECKF(system(cmd) == 0, "llvm-mc/llvm-objdump failed on %s", s_path);
+
+    FILE *in = fopen(d_path, "r");
+    CHECK(in != nullptr);
+    if (!in) return;
+    char line[512];
+    u32 wi = 0, ri = 0;
+    while (fgets(line, sizeof line, in)) {
+        unsigned off, w;
+        char rel[96];
+        if (sscanf(line, " %x: %8x", &off, &w) == 2 && strstr(line, "\t") && off / 4 == wi &&
+            wi < n) {
+            CHECKF(w == words[wi], "symbolic %s: ncc=%08x llvm-mc=%08x",
+                   a64_op_names[cases[wi].op], words[wi], w);
+            wi++;
+        } else if (sscanf(line, " %x: %95s", &off, rel) == 2 && strncmp(rel, "IMAGE_REL_", 10) == 0) {
+            u32 k = off / 4;
+            CHECKF(k < n && rtypes[k] < NC_ARRAY_LEN(reloc_names) && reloc_names[rtypes[k]] &&
+                       strcmp(reloc_names[rtypes[k]], rel) == 0,
+                   "symbolic %s: relocation ncc=%s llvm-mc=%s", k < n ? a64_op_names[cases[k].op] : "?",
+                   k < n && rtypes[k] < NC_ARRAY_LEN(reloc_names) && reloc_names[rtypes[k]]
+                       ? reloc_names[rtypes[k]] : "?",
+                   rel);
+            ri++;
+        }
+    }
+    fclose(in);
+    CHECKF(wi == n, "llvm-objdump showed %u of %u instructions", wi, n);
+    CHECKF(ri == n, "llvm-objdump showed %u of %u relocations", ri, n);
 }

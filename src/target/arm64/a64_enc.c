@@ -161,7 +161,12 @@ u32 a64_encode(const MInst *mi, i64 pcrel, u16 *reloc_type) {
             *reloc_type = mi->smod == SM_SECREL_HI12   ? IMAGE_REL_ARM64_SECREL_HIGH12A
                           : mi->smod == SM_SECREL_LO12 ? IMAGE_REL_ARM64_SECREL_LOW12A
                                                        : IMAGE_REL_ARM64_PAGEOFFSET_12A;
-            return w | rn << 5 | dst;
+            /* SECREL_HIGH12A patches bits 12-23 of the section offset, so the
+             * add must be the shifted form (lsl #12). link.exe rejects the
+             * relocation on an unshifted add (LNK2040); lld-link silently
+             * patches it, producing a wrong address. */
+            u32 sh = mi->smod == SM_SECREL_HI12 ? 1u : 0u;
+            return w | sh << 22 | rn << 5 | dst;
         }
         u64 imm = (u64)mi->imm;
         u32 sh = 0;

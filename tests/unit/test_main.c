@@ -34,6 +34,7 @@ static const TestCase tests[] = {
     {"core", test_core},
     {"logical_imm", test_logical_imm},
     {"encode", test_encode_differential},
+    {"encode_sym", test_encode_symbolic},
     {"unwind", test_unwind},
     {"coff", test_coff},
     {"module", test_module},
