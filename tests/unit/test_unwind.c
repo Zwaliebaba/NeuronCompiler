@@ -190,13 +190,15 @@ void test_unwind(void) {
         if (!verify(&b, err, sizeof err)) rec_caught++;
         b.rec.xdata.data[i] = orig;
     }
-    /* Exactly four mutations are semantically equivalent and must survive:
-     * the two padding bytes after the final end (never executed), and the
-     * two bytes of the leading alloc_m. In a shape-B frame that allocation is
-     * immediately followed (in unwind order) by set_fp, which restores sp
-     * from x29, so its size never affects the unwound state - for our
-     * verifier or for RtlVirtualUnwind. Everything else must be caught. */
-    CHECKF(rec_caught == rec_mut - 4, "verifier caught %u of %u record mutations", rec_caught,
+    /* Exactly two mutations are semantically equivalent and must survive:
+     * the two bytes of the leading alloc_m. In a shape-B frame that
+     * allocation is immediately followed (in unwind order) by set_fp, which
+     * restores sp from x29, so its size never affects the unwound state - for
+     * our verifier or for RtlVirtualUnwind. The two padding bytes after the
+     * final end (0xE4) are never executed, but a flipped bit turns them into
+     * end_c (0xE5), which the verifier rejects outright because ncc never
+     * emits function fragments. Everything else must be caught. */
+    CHECKF(rec_caught == rec_mut - 2, "verifier caught %u of %u record mutations", rec_caught,
            rec_mut);
     unwind_record_free(&b.rec);
 }

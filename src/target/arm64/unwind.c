@@ -414,15 +414,30 @@ static bool step_valid(const FrameStep *s) {
  * table in Microsoft's documentation. Independent of frame_plan() on
  * purpose: the two must agree for packed data to be used. Only CR == 3
  * (chained, stp x29/lr) is supported. */
+/* Why a packed word could not be expanded (for the image checker's verdict). */
+static const char *packed_unsupported_reason;
+
 static bool packed_expand(PackedFields f, FramePlan *x) {
+    packed_unsupported_reason = nullptr;
     memset(x, 0, sizeof *x);
-    if (f.cr != 3 || f.reg_i > 10) return false;
+    if (f.cr != 3) {
+        /* CR 0/1: unchained frames; CR 2: pacibsp-signed. Valid Windows forms
+         * (MSVC emits them), but ncc never does and the expander does not
+         * model them. */
+        packed_unsupported_reason = f.cr == 2 ? "packed CR=2 (signed return address) not modelled"
+                                              : "packed CR=0/1 (unchained frame) not modelled";
+        return false;
+    }
+    if (f.reg_i > 10) return false;
     u32 nfp = f.reg_f ? f.reg_f + 1 : 0;
     u32 intsz = f.reg_i * 8, fpsz = nfp * 8;
     u32 savsz = NC_ALIGN_UP(intsz + fpsz + 64 * f.h, 16u);
     if (f.frame_size < savsz) return false;
     u32 locsz = f.frame_size - savsz;
-    if (f.h && f.reg_i == 0 && nfp == 0) return false;
+    if (f.h && f.reg_i == 0 && nfp == 0) {
+        packed_unsupported_reason = "packed H=1 without saved registers not modelled";
+        return false;
+    }
     for (u32 i = 0; i < f.reg_i; i += 2) {
         bool pair = i + 1 < f.reg_i;
         if (i == 0) add_step(x, pair ? FS_STP_X_PRE : FS_STR_X_PRE, 19, savsz);
@@ -687,6 +702,11 @@ static bool program_from_codes(UwProgram *u, const u8 *codes, u32 len, VErr *e) 
         u32 n = uw_decode(codes + pos, len - pos, &op);
         if (!n) return vfail(e, "truncated unwind code at byte %u", pos);
         if (op.kind == UW_UNKNOWN) return vunsupported(e, "unsupported unwind code %02x", codes[pos]);
+        /* end_c marks a function fragment: its prologue codes describe a
+         * phantom prologue in the parent region, so "instructions before the
+         * first end" no longer equals the fragment's own prologue length.
+         * ncc never emits fragments (Q-16) and the sweep does not model them. */
+        if (op.kind == UW_END_C) return vunsupported(e, "function fragment (end_c) not modelled");
         if (u->nops >= NC_ARRAY_LEN(u->ops) || pos >= NC_ARRAY_LEN(u->op_at_byte))
             return vfail(e, "too many unwind codes");
         u->op_at_byte[pos] = u->nops;
@@ -710,7 +730,10 @@ static bool program_from_record(UwProgram *u, const UnwindRecord *r, u32 func_by
         if (f.func_len != func_bytes)
             return vfail(e, "packed function length %u != %u", f.func_len, func_bytes);
         FramePlan x;
-        if (!packed_expand(f, &x)) return vfail(e, "packed data does not expand");
+        if (!packed_expand(f, &x)) {
+            if (packed_unsupported_reason) return vunsupported(e, "%s", packed_unsupported_reason);
+            return vfail(e, "packed data does not expand to a valid frame");
+        }
         UwCodes pc, ec;
         prolog_codes(&x, &pc);
         /* Packed epilogue: reverse prologue without the home stores and
@@ -1039,6 +1062,12 @@ UwCheckResult unwind_crosscheck(const u8 *code, u32 func_bytes, const UnwindReco
     static UwProgram u;
     if (!program_from_record(&u, r, func_bytes, &e))
         return e.skipped ? UWC_SKIPPED : UWC_FAIL;
+    if (4 * u.prolog_count > func_bytes) {
+        /* Only possible for fragments (the prologue lives in the parent
+         * region); for ncc's own functions unwind_verify rejects it. */
+        snprintf(err, errsz, "prologue longer than the function (fragment?) not modelled");
+        return UWC_SKIPPED;
+    }
     u32 lens[64];
     for (u32 i = 0; i < u.nscopes; i++) {
         u32 n = 0;
