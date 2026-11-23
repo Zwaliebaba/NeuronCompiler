@@ -49,14 +49,25 @@ rem The no-CRT program writes LF line endings; normalise before comparing.
 powershell -NoProfile -Command ^
   "$ok=$true; foreach($n in 'nocrt','crt'){ $a=(Get-Content %OUT%\$n.out) -join \"`n\"; $b=(Get-Content %OUT%\$n.expected) -join \"`n\"; if($a -ne $b){ Write-Host \"output mismatch: $n\"; $ok=$false } }; if(-not $ok){ exit 1 }" || goto :fail
 
+echo === RtlVirtualUnwind cross-check of every function's unwind data
+if exist build\ncc-uwcheck.exe (
+    rem ncc-built image: every function must be fully checkable.
+    build\ncc-uwcheck.exe --strict %OUT%\p0_nocrt.exe || goto :fail
+    rem CRT image: MSVC-compiled CRT functions may be skipped, none may fail.
+    build\ncc-uwcheck.exe %OUT%\p0_crt.exe || goto :fail
+) else (
+    echo ncc-uwcheck.exe not built; run build.cmd to include this check
+)
+
 echo === dumpbin /unwindinfo (for review)
 dumpbin /nologo /unwindinfo %OUT%\p0_nocrt.exe > %OUT%\nocrt.unwind.txt
 type %OUT%\nocrt.unwind.txt
 
 echo.
 echo phase-0 acceptance PASSED
-echo Next manual step: open %OUT%\p0_nocrt.exe in the VS debugger, break on p0_main,
-echo step by line through %OUT%\p0_nocrt.obj.pseudo.c and check the call stack.
+echo Next manual steps: open %OUT%\p0_nocrt.exe in the VS debugger, break on p0_main,
+echo step by line through %OUT%\p0_nocrt.obj.pseudo.c and check the call stack; and
+echo compare S_FRAMEPROC in "cvdump %OUT%\p0_nocrt.obj" with a cl /Z7 object (Q-26).
 exit /b 0
 
 :fail

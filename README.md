@@ -18,6 +18,7 @@ tail of the pipeline, driven by hand-built machine code rather than a front end:
 | Module emission | `src/target/arm64/a64_module.c` | Pseudo expansion, branch relaxation, COMDAT text with associative unwind and debug sections |
 | COFF writer | `src/obj/coff` | Regular and bigobj formats, relocation overflow, `.drectve`, `@feat.00` |
 | CodeView | `src/debug/codeview` | Object and compiler records, function symbols, line tables, type records |
+| `ncc-uwcheck` | `src/tools/uwcheck.c` | Reads the unwind data back out of a linked `.exe` and unwinds from every prologue and epilogue instruction; on Windows also with the OS's own `RtlVirtualUnwind` |
 | `p0demo` | `src/tools/p0demo.c` | Builds two demo programs: one without a CRT (kernel32 only), one for the MSVC CRT (`printf`, TLS) |
 
 There is no C front end yet. That is phase 1.
@@ -43,9 +44,10 @@ make test-link
 `make test` runs the unit tests. These include encoding every instruction form
 and comparing the bytes with `llvm-mc`, and sweeping 38,016 frame shapes through
 the unwind verifier, with mutation tests that check it rejects broken code.
+`make check-windows` compiles every source for Windows ARM64 against the mingw-w64 headers.
 `make test-link` generates the demo objects and checks they are reproducible.
-It then links the no-CRT program with `lld-link` and inspects the image, unwind
-data and PDB with LLVM's tools.
+It then links the no-CRT program with `lld-link`, inspects the image, unwind data and
+PDB with LLVM's tools, and runs `ncc-uwcheck --strict` on the linked image.
 
 ## Windows on Arm acceptance
 
@@ -56,7 +58,8 @@ tests\windows\p0-accept.cmd
 ```
 
 This builds the tools with `clang` via `build.cmd`, links both demo programs
-with `link.exe`, runs them and checks their output. Instead of building on
+with `link.exe`, runs them and checks their output. It then cross-checks every
+function's unwind data against `RtlVirtualUnwind`. Instead of building on
 Windows, you can pass a directory containing `p0_nocrt.obj` and `p0_crt.obj`
 from a Linux build or the CI artifact. The objects are byte-identical on every
 host.

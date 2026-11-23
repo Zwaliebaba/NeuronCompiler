@@ -395,6 +395,21 @@ static PackedFields packed_decode(u32 w) {
                           (w >> 20) & 1, (w >> 21) & 3, (w >> 23) * 16};
 }
 
+/* Whether a step can be represented by its unwind code and instruction.
+ * Packed words from an image may be arbitrary, so their expansion is
+ * validated rather than asserted. */
+static bool step_valid(const FrameStep *s) {
+    u32 o = s->off;
+    switch (s->kind) {
+    case FS_STP_X_PRE: case FS_STP_D_PRE: case FS_FPLR_PRE: return o >= 8 && o <= 512 && o % 8 == 0;
+    case FS_STR_X_PRE: case FS_STR_D_PRE: return o >= 8 && o <= 256 && o % 8 == 0;
+    case FS_STP_X: case FS_STR_X: case FS_STP_D: case FS_STR_D: case FS_FPLR: case FS_HOME:
+        return o <= 504 && o % 8 == 0;
+    case FS_ALLOC: case FS_CHK_SUB: return o % 16 == 0 && o < (1u << 28);
+    default: return true;
+    }
+}
+
 /* Expands packed fields into the canonical prologue, following the step
  * table in Microsoft's documentation. Independent of frame_plan() on
  * purpose: the two must agree for packed data to be used. Only CR == 3
@@ -432,6 +447,9 @@ static bool packed_expand(PackedFields f, FramePlan *x) {
     }
     add_step(x, FS_SET_FP, 0, 0);
     x->shape = SHAPE_A;
+    if (locsz < 16) return false; /* a chained frame always saves {x29, lr} */
+    for (u32 i = 0; i < x->nsteps; i++)
+        if (!step_valid(&x->steps[i])) return false;
     return true;
 }
 
@@ -550,11 +568,26 @@ typedef struct VErr {
     char *buf;
     size_t size;
     bool failed;
+    bool skipped; /* failure means "outside what the verifier models", not "wrong" */
 } VErr;
 
 static bool vfail(VErr *e, const char *fmt, ...) {
     if (e->failed) return false;
     e->failed = true;
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(e->buf, e->size, fmt, ap);
+    va_end(ap);
+    return false;
+}
+
+/* Like vfail, but for constructs the verifier does not model (instructions
+ * ncc never emits in frame code, unwind codes it never generates). For ncc's
+ * own functions this is still a failure; for foreign code in a linked image
+ * (e.g. the CRT) the function is reported as skipped. */
+static bool vunsupported(VErr *e, const char *fmt, ...) {
+    if (e->failed) return false;
+    e->failed = e->skipped = true;
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(e->buf, e->size, fmt, ap);
@@ -574,7 +607,7 @@ static bool emu_exec(EmuState *s, u32 w, VErr *e) {
         u32 opc = w >> 30, v = (w >> 26) & 1, idx = (w >> 23) & 3, l = (w >> 22) & 1;
         u32 rt2 = (w >> 10) & 31;
         if (!((v == 0 && opc == 2) || (v == 1 && opc == 1)) || idx == 0)
-            return vfail(e, "unsupported pair instruction %08x", w);
+            return vunsupported(e, "unsupported pair instruction %08x", w);
         i64 imm = sext((w >> 15) & 0x7F, 7) * 8;
         u64 base = *xreg(s, rn);
         u64 addr = idx == 1 ? base : base + (u64)imm;
@@ -589,14 +622,14 @@ static bool emu_exec(EmuState *s, u32 w, VErr *e) {
         if (idx != 2) *xreg(s, rn) = base + (u64)imm;
     } else if ((w & 0x3B000000) == 0x39000000) { /* ldr/str unsigned offset */
         u32 size = w >> 30, v = (w >> 26) & 1, opc = (w >> 22) & 3;
-        if (size != 3 || opc > 1) return vfail(e, "unsupported load/store %08x", w);
+        if (size != 3 || opc > 1) return vunsupported(e, "unsupported load/store %08x", w);
         u64 addr = *xreg(s, rn) + (((w >> 10) & 0xFFF) << 3);
         if (opc) { if (v) s->d[rt] = mem_load(s, addr); else s->x[rt] = mem_load(s, addr); }
         else mem_store(s, addr, v ? s->d[rt] : s->x[rt]);
     } else if ((w & 0x3B200000) == 0x38000000) { /* ldr/str imm9 */
         u32 size = w >> 30, v = (w >> 26) & 1, opc = (w >> 22) & 3, idx = (w >> 10) & 3;
         if (size != 3 || opc > 1 || (idx != 1 && idx != 3))
-            return vfail(e, "unsupported load/store %08x", w);
+            return vunsupported(e, "unsupported load/store %08x", w);
         i64 imm = sext((w >> 12) & 0x1FF, 9);
         u64 base = *xreg(s, rn);
         u64 addr = idx == 1 ? base : base + (u64)imm;
@@ -604,13 +637,13 @@ static bool emu_exec(EmuState *s, u32 w, VErr *e) {
         else mem_store(s, addr, v ? s->d[rt] : s->x[rt]);
         *xreg(s, rn) = base + (u64)imm;
     } else if ((w & 0x9F000000) == 0x91000000) { /* add/sub immediate, 64-bit */
-        if (w & (1u << 29)) return vfail(e, "flag-setting add/sub in frame code %08x", w);
+        if (w & (1u << 29)) return vunsupported(e, "flag-setting add/sub in frame code %08x", w);
         u64 imm = ((w >> 10) & 0xFFF) << ((w >> 22) & 1 ? 12 : 0);
         u64 src = *xreg(s, rn);
         *xreg(s, rt) = (w & (1u << 30)) ? src - imm : src + imm;
     } else if ((w & 0x9FE00000) == 0x8B200000) { /* add/sub extended, 64-bit */
         u32 rm = (w >> 16) & 31, opt = (w >> 13) & 7, sh = (w >> 10) & 7;
-        if (opt != EX_UXTX || (w & (1u << 29))) return vfail(e, "unsupported extend %08x", w);
+        if (opt != EX_UXTX || (w & (1u << 29))) return vunsupported(e, "unsupported extend %08x", w);
         u64 src = *xreg(s, rn), m = (rm == 31 ? 0 : s->x[rm]) << sh;
         *xreg(s, rt) = (w & (1u << 30)) ? src - m : src + m;
     } else if ((w & 0x9F800000) == 0x92800000) { /* movn/movz/movk, 64-bit */
@@ -619,7 +652,7 @@ static bool emu_exec(EmuState *s, u32 w, VErr *e) {
         if (opc == 0) s->x[rt] = ~imm;
         else if (opc == 2) s->x[rt] = imm;
         else if (opc == 3) s->x[rt] = (s->x[rt] & ~((u64)0xFFFF << (16 * hw))) | imm;
-        else return vfail(e, "bad move-wide %08x", w);
+        else return vunsupported(e, "bad move-wide %08x", w);
     } else if ((w & 0xFC000000) == 0x94000000) { /* bl: only __chkstk in frame code */
         s->x[30] = s->pc + 4;
         s->x[16] = s->x[17] = POISON; /* __chkstk clobbers x16/x17, preserves x15 */
@@ -628,7 +661,7 @@ static bool emu_exec(EmuState *s, u32 w, VErr *e) {
         return true;
     } else if ((w & 0xFFFFF01F) == 0xD503201F) { /* hint space: nop, pacibsp */
     } else {
-        return vfail(e, "unexpected instruction %08x in frame code", w);
+        return vunsupported(e, "unexpected instruction %08x in frame code", w);
     }
     s->pc += 4;
     return true;
@@ -644,6 +677,7 @@ typedef struct UwProgram {
     u32 scope_off[64];   /* bytes */
     u32 scope_op[64];    /* op index */
     u32 func_bytes;
+    bool header_epilog;  /* E bit: one epilogue, described in the header */
 } UwProgram;
 
 static bool program_from_codes(UwProgram *u, const u8 *codes, u32 len, VErr *e) {
@@ -652,7 +686,7 @@ static bool program_from_codes(UwProgram *u, const u8 *codes, u32 len, VErr *e) 
         UwOp op;
         u32 n = uw_decode(codes + pos, len - pos, &op);
         if (!n) return vfail(e, "truncated unwind code at byte %u", pos);
-        if (op.kind == UW_UNKNOWN) return vfail(e, "unsupported unwind code %02x", codes[pos]);
+        if (op.kind == UW_UNKNOWN) return vunsupported(e, "unsupported unwind code %02x", codes[pos]);
         if (u->nops >= NC_ARRAY_LEN(u->ops) || pos >= NC_ARRAY_LEN(u->op_at_byte))
             return vfail(e, "too many unwind codes");
         u->op_at_byte[pos] = u->nops;
@@ -666,8 +700,8 @@ static bool program_from_codes(UwProgram *u, const u8 *codes, u32 len, VErr *e) 
     return true;
 }
 
-static bool program_from_record(UwProgram *u, const FramePlan *p, const UnwindRecord *r,
-                                u32 func_bytes, VErr *e) {
+static bool program_from_record(UwProgram *u, const UnwindRecord *r, u32 func_bytes,
+                                VErr *e) {
     memset(u, 0, sizeof *u);
     u->func_bytes = func_bytes;
     if (r->packed) {
@@ -711,7 +745,18 @@ static bool program_from_record(UwProgram *u, const FramePlan *p, const UnwindRe
         words = (w1 >> 16) & 0xFF;
         pos = 8;
     }
-    if (ebit) return vfail(e, "E bit not generated by ncc");
+    if (ebit) {
+        /* One epilogue whose codes start at index `nep`; ncc never sets E, and
+         * the epilogue's location is not recorded, so only prologue and body
+         * can be checked for such functions. */
+        u32 code_bytes = words * 4;
+        if (pos + code_bytes + (xbit ? 4u : 0u) != x->len)
+            return vfail(e, "xdata size mismatch (%u code words, %u bytes total)", words, x->len);
+        if (!program_from_codes(u, x->data + pos, code_bytes, e)) return false;
+        u->header_epilog = true;
+        u->nscopes = 0;
+        return true;
+    }
     if (nep > NC_ARRAY_LEN(u->scope_off)) return vfail(e, "too many epilogue scopes");
     u32 scope_index[64];
     for (u32 i = 0; i < nep; i++) {
@@ -732,7 +777,6 @@ static bool program_from_record(UwProgram *u, const FramePlan *p, const UnwindRe
         if (scope_index[i] >= code_bytes) return vfail(e, "epilogue index out of range");
         u->scope_op[i] = u->op_at_byte[scope_index[i]];
     }
-    (void)p;
     return true;
 }
 
@@ -792,7 +836,7 @@ static bool uw_run(const UwProgram *u, u32 off, EmuState *s, VErr *e) {
         case UW_END: s->pc = s->x[30]; return true;
         case UW_END_C:
         case UW_SAVE_NEXT:
-        case UW_UNKNOWN: return vfail(e, "unwind code %s not supported by the verifier",
+        case UW_UNKNOWN: return vunsupported(e, "unwind code %s not supported by the verifier",
                                       uw_names[op.kind]);
         }
     }
@@ -815,70 +859,197 @@ static bool check_unwound(const EmuState *got, const EmuState *entry, const char
     return true;
 }
 
+/* ---- the sweep -------------------------------------------------------- */
+
+typedef struct Sweep {
+    const UwProgram *u;
+    const u8 *code;
+    u32 func_bytes;
+    u32 plen;           /* prologue instructions */
+    u32 nepi;
+    const u32 *epi_off; /* bytes */
+    const u32 *epi_len; /* instructions, including ret */
+    u64 entry_sp;
+    bool sim_dynamic;   /* move sp in the body as a dynamic allocation would */
+    i64 expect_fp_sp;   /* x29 - sp after the prologue, or -1 if unknown */
+    UwOsUnwindFn os;
+    void *os_ctx;
+    u32 checks;
+} Sweep;
+
+static void to_machine(const EmuState *s, UwMachine *m) {
+    memcpy(m->x, s->x, sizeof m->x);
+    memcpy(m->d, s->d, sizeof m->d);
+    m->sp = s->sp;
+    m->pc = s->pc;
+}
+
+static void entry_state(EmuState *s, u64 sp) {
+    memset(s, 0, sizeof *s);
+    for (u32 i = 0; i < 31; i++) s->x[i] = 0xA5A5000000000000ull | (u64)i << 32 | 0x1111u * i;
+    for (u32 i = 0; i < 32; i++) s->d[i] = 0xD0D0000000000000ull | (u64)i << 8;
+    s->x[30] = 0x0000700000001230ull; /* return address */
+    s->sp = sp;
+}
+
+/* Unwinds from `off` in state `st` with our unwinder and, if present, the
+ * external one, and checks both recover the entry state. */
+static bool check_at(Sweep *w, const EmuState *st, const EmuState *entry, u32 off,
+                     const char *where, VErr *e) {
+    static EmuState tmp;
+    tmp = *st;
+    if (!uw_run(w->u, off, &tmp, e)) return false;
+    if (!check_unwound(&tmp, entry, where, off, e)) return false;
+    w->checks++;
+    if (!w->os) return true;
+
+    static u64 addr[MEM_SLOTS], val[MEM_SLOTS];
+    u32 n = 0;
+    for (u32 i = 0; i < MEM_SLOTS; i++)
+        if (st->mem[i].used) { addr[n] = st->mem[i].addr; val[n] = st->mem[i].val; n++; }
+    UwMachine in, out;
+    to_machine(st, &in);
+    if (!w->os(w->os_ctx, off, &in, addr, val, n, &out))
+        return vfail(e, "%s +%u: external unwinder failed", where, off);
+    memcpy(tmp.x, out.x, sizeof tmp.x);
+    memcpy(tmp.d, out.d, sizeof tmp.d);
+    tmp.sp = out.sp;
+    tmp.pc = out.pc;
+    char label[64];
+    snprintf(label, sizeof label, "%s (external unwinder)", where);
+    if (!check_unwound(&tmp, entry, label, off, e)) return false;
+    w->checks++;
+    return true;
+}
+
+static bool value_stored(const EmuState *s, u64 v) {
+    for (u32 i = 0; i < MEM_SLOTS; i++)
+        if (s->mem[i].used && s->mem[i].val == v) return true;
+    return false;
+}
+
+static bool sweep(Sweep *w, VErr *e) {
+    static EmuState entry, cur, epi;
+    entry_state(&entry, w->entry_sp);
+    if (4 * w->plen > w->func_bytes) return vfail(e, "prologue longer than the function");
+
+    /* Every prefix of the prologue. */
+    cur = entry;
+    for (u32 k = 0; k <= w->plen; k++) {
+        if (!check_at(w, &cur, &entry, 4 * k, "prologue", e)) return false;
+        if (k < w->plen && !emu_exec(&cur, rd_u32(w->code + 4 * k), e)) return false;
+    }
+    if (w->expect_fp_sp >= 0 && cur.x[29] != cur.sp + (u64)w->expect_fp_sp)
+        return vfail(e, "x29 - sp after prologue is %lld, plan says %lld",
+                     (long long)(cur.x[29] - cur.sp), (long long)w->expect_fp_sp);
+
+    /* The body may overwrite every callee-saved register the prologue saved
+     * (and lr, by calling). Clobber them, so that from here on an unwinder
+     * only recovers them if it really restores them from the stack. Without
+     * this, a record that omits a register would still "restore" it, because
+     * nothing ever changed it. x29 keeps its frame-pointer value. */
+    for (u32 r = 19; r <= 30; r++)
+        if (r != 29 && value_stored(&cur, entry.x[r])) cur.x[r] = 0xB0D7000000000000ull | r;
+    for (u32 r = 8; r <= 15; r++)
+        if (value_stored(&cur, entry.d[r])) cur.d[r] = 0xB0D7D00000000000ull | r;
+
+    /* One body instruction, if there is one before the first epilogue. */
+    u32 body_off = 4 * w->plen;
+    bool is_epilog = false;
+    for (u32 i = 0; i < w->nepi; i++) is_epilog |= w->epi_off[i] == body_off;
+    if (!is_epilog && body_off < w->func_bytes && !check_at(w, &cur, &entry, body_off, "body", e))
+        return false;
+
+    /* Every instruction boundary of every epilogue. */
+    EmuState *start = &cur;
+    if (w->sim_dynamic) start->sp -= 0x1230;
+    for (u32 i = 0; i < w->nepi; i++) {
+        u32 off = w->epi_off[i], len = w->epi_len[i];
+        if (off + 4 * len > w->func_bytes) return vfail(e, "epilogue past function end");
+        epi = *start;
+        epi.pc = off;
+        for (u32 j = 0; j < len; j++) {
+            if (!check_at(w, &epi, &entry, off + 4 * j, "epilogue", e)) return false;
+            if (!emu_exec(&epi, rd_u32(w->code + off + 4 * j), e)) return false;
+        }
+        /* After ret the machine state itself must be the entry state. */
+        if (!check_unwound(&epi, &entry, "after ret", off + 4 * len, e)) return false;
+    }
+    return true;
+}
+
 bool unwind_verify(const FramePlan *p, const u8 *code, u32 func_bytes, const u32 *epilogs,
                    u32 nepilogs, const UnwindRecord *r, char *err, size_t errsz) {
-    VErr e = {err, errsz, false};
+    VErr e = {err, errsz, false, false};
     if (errsz) err[0] = 0;
     if (p->shape == SHAPE_NONE) return r->none ? true : vfail(&e, "frameless function has unwind data");
     if (r->none) return vfail(&e, "function with a frame has no unwind data");
 
     static UwProgram u; /* large; not reentrant, verification is single-threaded */
-    if (!program_from_record(&u, p, r, func_bytes, &e)) return false;
-
-    static EmuState entry, cur, tmp;
-    memset(&entry, 0, sizeof entry);
-    for (u32 i = 0; i < 31; i++) entry.x[i] = 0xA5A5000000000000ull | (u64)i << 32 | 0x1111u * i;
-    for (u32 i = 0; i < 32; i++) entry.d[i] = 0xD0D0000000000000ull | (u64)i << 8;
-    entry.x[30] = 0x0000700000001230ull; /* return address */
-    entry.sp = 0x0000000010000000ull;
-    entry.pc = 0;
-
+    if (!program_from_record(&u, r, func_bytes, &e)) return false;
     u32 plen = frame_prologue_len(p), elen = frame_epilogue_len(p);
-    if (4 * plen > func_bytes) return vfail(&e, "prologue longer than the function");
     if (u.prolog_count != plen)
         return vfail(&e, "unwind codes describe %u prologue instructions, prologue has %u",
                      u.prolog_count, plen);
+    if (nepilogs > 64) return vfail(&e, "too many epilogues for the verifier");
+    u32 lens[64];
+    for (u32 i = 0; i < nepilogs; i++) lens[i] = elen;
+    Sweep w = {.u = &u, .code = code, .func_bytes = func_bytes, .plen = plen, .nepi = nepilogs,
+               .epi_off = epilogs, .epi_len = lens, .entry_sp = 0x0000000010000000ull,
+               .sim_dynamic = p->dynamic, .expect_fp_sp = p->fp_sp_offset};
+    return sweep(&w, &e);
+}
 
-    /* Every prefix of the prologue. */
-    cur = entry;
-    for (u32 k = 0; k <= plen; k++) {
-        tmp = cur;
-        if (!uw_run(&u, 4 * k, &tmp, &e)) return false;
-        if (!check_unwound(&tmp, &entry, "prologue", 4 * k, &e)) return false;
-        if (k < plen && !emu_exec(&cur, rd_u32(code + 4 * k), &e)) return false;
-    }
-    EmuState *body = &cur; /* state after the prologue */
-    if (body->x[29] != body->sp + p->fp_sp_offset)
-        return vfail(&e, "x29 - sp after prologue is %lld, plan says %u",
-                     (long long)(body->x[29] - body->sp), p->fp_sp_offset);
+/* ---- records read back from a linked image ----------------------------- */
 
-    /* One body instruction (if the function has a body between prologue and
-     * the first epilogue). */
-    u32 body_off = 4 * plen;
-    bool is_epilog = false;
-    for (u32 i = 0; i < nepilogs; i++) is_epilog |= epilogs[i] == body_off;
-    if (!is_epilog && body_off < func_bytes) {
-        tmp = *body;
-        if (!uw_run(&u, body_off, &tmp, &e)) return false;
-        if (!check_unwound(&tmp, &entry, "body", body_off, &e)) return false;
+bool unwind_record_from_pdata(u32 word2, const u8 *xdata, size_t avail, UnwindRecord *out,
+                              u32 *func_bytes) {
+    memset(out, 0, sizeof *out);
+    u32 flag = word2 & 3;
+    if (flag == 1) {
+        out->packed = true;
+        out->packed_word = word2;
+        *func_bytes = packed_decode(word2).func_len;
+        return true;
     }
-
-    /* Every instruction boundary of every epilogue. */
-    static EmuState start, epi;
-    start = *body;
-    if (p->dynamic) start.sp -= 0x1230; /* simulate a dynamic allocation in the body */
-    for (u32 i = 0; i < nepilogs; i++) {
-        if (epilogs[i] + 4 * elen > func_bytes) return vfail(&e, "epilogue past function end");
-        epi = start;
-        epi.pc = epilogs[i];
-        for (u32 j = 0; j < elen; j++) {
-            tmp = epi;
-            if (!uw_run(&u, epilogs[i] + 4 * j, &tmp, &e)) return false;
-            if (!check_unwound(&tmp, &entry, "epilogue", epilogs[i] + 4 * j, &e)) return false;
-            if (!emu_exec(&epi, rd_u32(code + epilogs[i] + 4 * j), &e)) return false;
-        }
-        /* After ret the machine state itself must be the entry state. */
-        if (!check_unwound(&epi, &entry, "after ret", epilogs[i] + 4 * elen, &e)) return false;
+    if (flag != 0 || !xdata || avail < 4) return false; /* flag 2: no prologue; 3: link record */
+    u32 w0 = rd_u32(xdata), size = 4, scopes = (w0 >> 22) & 0x1F, words = (w0 >> 27) & 0x1F;
+    if ((w0 >> 22) == 0) { /* extension word */
+        if (avail < 8) return false;
+        u32 w1 = rd_u32(xdata + 4);
+        size = 8;
+        scopes = w1 & 0xFFFF;
+        words = (w1 >> 16) & 0xFF;
     }
+    if (!((w0 >> 21) & 1)) size += 4 * scopes;
+    size += 4 * words;
+    if ((w0 >> 20) & 1) size += 4; /* exception handler RVA; handler data is not needed */
+    if (size > avail) return false;
+    buf_bytes(&out->xdata, xdata, size);
+    *func_bytes = (w0 & 0x3FFFF) * 4;
     return true;
+}
+
+UwCheckResult unwind_crosscheck(const u8 *code, u32 func_bytes, const UnwindRecord *r,
+                                u64 entry_sp, UwOsUnwindFn os, void *os_ctx, u32 *checks,
+                                char *err, size_t errsz) {
+    VErr e = {err, errsz, false, false};
+    if (errsz) err[0] = 0;
+    *checks = 0;
+    static UwProgram u;
+    if (!program_from_record(&u, r, func_bytes, &e))
+        return e.skipped ? UWC_SKIPPED : UWC_FAIL;
+    u32 lens[64];
+    for (u32 i = 0; i < u.nscopes; i++) {
+        u32 n = 0;
+        while (u.scope_op[i] + n < u.nops && u.ops[u.scope_op[i] + n].kind != UW_END) n++;
+        lens[i] = n + 1; /* the codes, plus ret for the end */
+    }
+    Sweep w = {.u = &u, .code = code, .func_bytes = func_bytes, .plen = u.prolog_count,
+               .nepi = u.nscopes, .epi_off = u.scope_off, .epi_len = lens, .entry_sp = entry_sp,
+               .expect_fp_sp = -1, .os = os, .os_ctx = os_ctx};
+    bool ok = sweep(&w, &e);
+    *checks = w.checks;
+    if (!ok) return e.skipped ? UWC_SKIPPED : UWC_FAIL;
+    return u.header_epilog ? UWC_PARTIAL : UWC_OK;
 }

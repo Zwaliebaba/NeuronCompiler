@@ -37,6 +37,9 @@ check "lld-link links the no-CRT program" \
     lld-link /machine:arm64 /entry:p0_start /subsystem:console /debug /libpath:"$OUT" \
     /out:"$OUT/p0_nocrt.exe" "$OUT/p0_nocrt.obj"
 
+check "ncc-uwcheck: every unwind record in the linked image checks out" \
+    "$BUILD/ncc-uwcheck" --strict "$OUT/p0_nocrt.exe"
+
 readobj_clean() { ! llvm-readobj "$@" 2>&1 | grep -qiE "warning|error"; }
 check "image headers parse" readobj_clean --file-headers --sections "$OUT/p0_nocrt.exe"
 check "unwind data parses without warnings" readobj_clean --unwind "$OUT/p0_nocrt.exe"

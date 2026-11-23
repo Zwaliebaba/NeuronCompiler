@@ -13,4 +13,5 @@ set TEST_SRC=
 for %%f in (tests\unit\*.c) do set TEST_SRC=!TEST_SRC! %%f
 clang %CFLAGS% %LIB_SRC% src\tools\p0demo.c -o build\p0demo.exe || exit /b 1
 clang %CFLAGS% %LIB_SRC% %TEST_SRC% -o build\ncc-test.exe || exit /b 1
-echo built build\p0demo.exe and build\ncc-test.exe
+clang %CFLAGS% %LIB_SRC% src\tools\uwcheck.c -o build\ncc-uwcheck.exe || exit /b 1
+echo built build\p0demo.exe, build\ncc-test.exe and build\ncc-uwcheck.exe

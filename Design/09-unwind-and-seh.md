@@ -44,7 +44,20 @@ The unwind verifier (implemented in phase 0 as `unwind_verify`, `src/target/arm6
 * For one representative body PC, it runs the full code sequence and checks the same.
 * It decodes packed `.pdata` through the documented expansion and checks equivalence with the full form.
 
-This covers exactly the class of bugs that are otherwise found only when a sampling profiler hits a prologue. The test suite proves the verifier has teeth by mutation: every single-field change to a prologue instruction, and swapping the first two prologue instructions, must be rejected. For every bit-flip in a full `.xdata` record's unwind codes, the test names the exact set allowed to survive: padding after the final `end`, which is never executed, and the size of an `alloc` that is immediately undone by `set_fp` in unwind order. That size is semantically dead for any unwinder, ours or the OS's. As an independent cross-check, CI also runs `llvm-readobj --unwind` and, on Windows, a harness that calls `RtlVirtualUnwind` at every instruction offset of every function in a test DLL against a context reconstructed by single-stepping (debug API), which tests against the real OS unwinder rather than our reading of the spec.
+This covers exactly the class of bugs that are otherwise found only when a sampling profiler hits a prologue. The test suite proves the verifier has teeth by mutation: every single-field change to a prologue instruction, and swapping the first two prologue instructions, must be rejected. For every bit-flip in a full `.xdata` record's unwind codes, the test names the exact set allowed to survive: padding after the final `end`, which is never executed, and the size of an `alloc` that is immediately undone by `set_fp` in unwind order. That size is semantically dead for any unwinder, ours or the OS's.
+
+After the prologue, the sweep clobbers every callee-saved register the prologue stored, and `lr`, as a real body may. An unwinder therefore only recovers them by genuinely restoring them from the stack. Without this, a record that omits a register would pass, because nothing ever changed that register. The first version of the verifier had exactly that hole; the image checker below found it. A mutation test over every field of packed `.pdata` words now guards against it.
+
+**Image checker.** `ncc-uwcheck` (`src/tools/uwcheck.c`) runs the same sweep on a *linked* image, driven only by the unwind data found there. It maps the PE from disk without executing it, walks `.pdata`, and rebuilds each record from the image bytes. For every function it emulates the real code's prologue prefixes and epilogue boundaries into a stack buffer and unwinds from each boundary:
+
+* with our own unwinder everywhere, which proves the records survive linking;
+* on Windows, additionally with the OS's `RtlVirtualUnwind`, the independent oracle.
+
+This replaces the single-stepping debugger harness originally planned here. It is deterministic, needs no debug API, and tests the same thing: the OS unwinder recovering the caller's state from every instruction boundary of the real code.
+
+Functions the emulator cannot model are reported as skipped; for MSVC-compiled CRT code that is expected. `--strict` makes skips fail, for images built entirely by `ncc`. Robustness on hostile input was fuzzed under ASan: 400 images with corrupted `.pdata`/`.xdata` produced only pass/fail results, never a crash.
+
+As a further independent reader, CI also runs `llvm-readobj --unwind` on the linked image.
 
 ## 4. `setjmp`/`longjmp`
 
