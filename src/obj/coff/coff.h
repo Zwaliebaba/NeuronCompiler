@@ -7,6 +7,7 @@
 #include "../../core/buf.h"
 #include "../../core/vec.h"
 
+// clang-format off: PE/COFF specification values, aligned by hand (AGENTS.md §4)
 enum {
     IMAGE_FILE_MACHINE_ARM64 = 0xAA64,
 
@@ -58,71 +59,78 @@ enum {
     IMAGE_REL_ARM64_BRANCH14       = 0x10,
     IMAGE_REL_ARM64_REL32          = 0x11,
 };
+// clang-format on
 
 /* Above this many sections the writer switches to the bigobj format. */
-enum { COFF_MAX_REGULAR_SECTIONS = 65279 };
+enum
+{
+  COFF_MAX_REGULAR_SECTIONS = 65279
+};
 
 /* Section alignment as characteristics bits (align must be a power of 2, <= 8192). */
-u32 coff_align_flags(u32 align);
+u32 CoffAlignFlags(u32 _align);
 
 typedef u32 CoffSec; /* 1-based section number */
 typedef u32 CoffSym; /* writer-internal symbol handle (not the file index) */
 
-typedef struct CoffReloc {
-    u32 offset;
-    CoffSym sym;
-    u16 type;
+typedef struct CoffReloc
+{
+  u32 offset;
+  CoffSym sym;
+  u16 type;
 } CoffReloc;
 
-typedef struct CoffSection {
-    const char *name;
-    u32 characteristics;
-    Buf data;
-    u32 bss_size; /* for uninitialized-data sections */
-    VEC(CoffReloc) relocs;
-    u8 comdat_sel;     /* 0 = not COMDAT */
-    CoffSec assoc;     /* for IMAGE_COMDAT_SELECT_ASSOCIATIVE */
-    CoffSym sec_sym;   /* the section's own symbol */
+typedef struct CoffSection
+{
+  const char* name;
+  u32 characteristics;
+  Buf data;
+  u32 bssSize; /* for uninitialized-data sections */
+  VEC(CoffReloc) relocs;
+  u8 comdatSel;   /* 0 = not COMDAT */
+  CoffSec assoc;  /* for IMAGE_COMDAT_SELECT_ASSOCIATIVE */
+  CoffSym secSym; /* the section's own symbol */
 } CoffSection;
 
-typedef struct CoffSymbol {
-    const char *name;
-    i32 section;   /* 0 undefined, -1 absolute, else CoffSec */
-    u32 value;
-    u16 type;
-    u8 storage_class;
-    bool is_section_sym;
+typedef struct CoffSymbol
+{
+  const char* name;
+  i32 section; /* 0 undefined, -1 absolute, else CoffSec */
+  u32 value;
+  u16 type;
+  u8 storageClass;
+  bool isSectionSym;
 } CoffSymbol;
 
-typedef struct CoffObj {
-    Arena *arena;
-    VEC(CoffSection) sections;
-    VEC(CoffSymbol) symbols;
-    Buf directives;
-    bool force_bigobj;
+typedef struct CoffObj
+{
+  Arena* arena;
+  VEC(CoffSection) sections;
+  VEC(CoffSymbol) symbols;
+  Buf directives;
+  bool forceBigobj;
 } CoffObj;
 
-void coff_init(CoffObj *o, Arena *arena);
-void coff_free(CoffObj *o);
+void CoffInit(CoffObj* _o, Arena* _arena);
+void CoffFree(CoffObj* _o);
 
 /* Adds a section. `align` is in bytes. A section symbol is created for it. */
-CoffSec coff_add_section(CoffObj *o, const char *name, u32 characteristics, u32 align);
-CoffSection *coff_section(CoffObj *o, CoffSec s);
-void coff_set_comdat(CoffObj *o, CoffSec s, u8 selection, CoffSec assoc);
+CoffSec CoffAddSection(CoffObj* _o, const char* _name, u32 _characteristics, u32 _align);
+CoffSection* CoffSectionGet(CoffObj* _o, CoffSec _s);
+void CoffSetComdat(CoffObj* _o, CoffSec _s, u8 _selection, CoffSec _assoc);
 
-/* Symbols. coff_symbol_named returns the existing symbol with that name or
- * creates an undefined external one; coff_define then gives it a location. */
-CoffSym coff_symbol_named(CoffObj *o, const char *name);
-CoffSym coff_add_symbol(CoffObj *o, const char *name, i32 section, u32 value, u16 type,
-                        u8 storage_class);
-void    coff_define(CoffObj *o, CoffSym sym, CoffSec sec, u32 value, u16 type, u8 storage_class);
-CoffSym coff_section_symbol(CoffObj *o, CoffSec s);
+/* Symbols. CoffSymbolNamed returns the existing symbol with that name or
+ * creates an undefined external one; CoffDefine then gives it a location. */
+CoffSym CoffSymbolNamed(CoffObj* _o, const char* _name);
+CoffSym CoffAddSymbol(CoffObj* _o, const char* _name, i32 _section, u32 _value, u16 _type, u8 _storageClass);
+void CoffDefine(CoffObj* _o, CoffSym _sym, CoffSec _sec, u32 _value, u16 _type, u8 _storageClass);
+CoffSym CoffSectionSymbol(CoffObj* _o, CoffSec _s);
 
-void coff_add_reloc(CoffObj *o, CoffSec s, u32 offset, CoffSym sym, u16 type);
-void coff_add_directive(CoffObj *o, const char *directive);
+void CoffAddReloc(CoffObj* _o, CoffSec _s, u32 _offset, CoffSym _sym, u16 _type);
+void CoffAddDirective(CoffObj* _o, const char* _directive);
 
 /* Serialises the object (symbol order: section symbols, then all other
  * symbols in creation order) into `out`. */
-void coff_serialize(CoffObj *o, Buf *out);
+void CoffSerialize(CoffObj* _o, Buf* _out);
 
 #endif

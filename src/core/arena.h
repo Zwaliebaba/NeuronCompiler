@@ -7,30 +7,32 @@
 
 typedef struct ArenaChunk ArenaChunk;
 
-typedef struct Arena {
-    ArenaChunk *head;
-    u8 *cur;
-    u8 *end;
-    size_t bytes_reserved;
+typedef struct Arena
+{
+  ArenaChunk* head;
+  u8* cur;
+  u8* end;
+  size_t bytesReserved;
 } Arena;
 
-typedef struct ArenaMark {
-    ArenaChunk *head;
-    u8 *cur;
+typedef struct ArenaMark
+{
+  ArenaChunk* head;
+  u8* cur;
 } ArenaMark;
 
-void  arena_init(Arena *a);
-void  arena_release(Arena *a);
-void *arena_alloc(Arena *a, size_t size, size_t align);
-void *arena_zalloc(Arena *a, size_t size, size_t align);
-char *arena_strdup(Arena *a, const char *s);
-char *arena_strndup(Arena *a, const char *s, size_t n);
-char *arena_printf(Arena *a, const char *fmt, ...);
+void ArenaInit(Arena* _a);
+void ArenaRelease(Arena* _a);
+void* ArenaAlloc(Arena* _a, size_t _size, size_t _align);
+void* ArenaZalloc(Arena* _a, size_t _size, size_t _align);
+char* ArenaStrdup(Arena* _a, const char* _s);
+char* ArenaStrndup(Arena* _a, const char* _s, size_t _n);
+char* ArenaPrintf(Arena* _a, const char* _fmt, ...);
 
-ArenaMark arena_mark(const Arena *a);
-void      arena_reset(Arena *a, ArenaMark m);
+ArenaMark ArenaGetMark(const Arena* _a);
+void ArenaReset(Arena* _a, ArenaMark _m);
 
-#define ARENA_NEW(a, T) ((T *)arena_zalloc((a), sizeof(T), alignof(T)))
-#define ARENA_NEW_ARRAY(a, T, n) ((T *)arena_zalloc((a), sizeof(T) * (size_t)(n), alignof(T)))
+#define ARENA_NEW(a, T) ((T*)ArenaZalloc((a), sizeof(T), alignof(T)))
+#define ARENA_NEW_ARRAY(a, T, n) ((T*)ArenaZalloc((a), sizeof(T) * (size_t)(n), alignof(T)))
 
 #endif

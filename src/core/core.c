@@ -7,103 +7,136 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-void nc_assert_fail(const char *expr, const char *file, int line) {
-    fflush(stdout);
-    fprintf(stderr, "%s(%d): fatal error NC0001: internal compiler error: assertion '%s' failed\n",
-            file, line, expr);
-    abort();
+void NcAssertFail(const char* _expr, const char* _file, int _line)
+{
+  fflush(stdout);
+  fprintf(stderr, "%s(%d): fatal error NC0001: internal compiler error: assertion '%s' failed\n", _file, _line, _expr);
+  abort();
 }
 
-void nc_fatal(const char *fmt, ...) {
-    fflush(stdout);
-    va_list ap;
-    va_start(ap, fmt);
-    fputs("ncc: fatal error NC0002: ", stderr);
-    vfprintf(stderr, fmt, ap);
-    fputc('\n', stderr);
-    va_end(ap);
-    exit(2);
+void NcFatal(const char* _fmt, ...)
+{
+  fflush(stdout);
+  va_list ap;
+  va_start(ap, _fmt);
+  fputs("ncc: fatal error NC0002: ", stderr);
+  vfprintf(stderr, _fmt, ap);
+  fputc('\n', stderr);
+  va_end(ap);
+  exit(2);
 }
 
-void *nc_xrealloc(void *p, size_t n) {
-    void *q = realloc(p, n ? n : 1);
-    if (!q) nc_fatal("out of memory (%zu bytes)", n);
-    return q;
+void* NcXrealloc(void* _p, size_t _n)
+{
+  void* q = realloc(_p, _n ? _n : 1);
+  if (!q)
+    NcFatal("out of memory (%zu bytes)", _n);
+  return q;
 }
 
-void nc_xfree(void *p) { free(p); }
+void NcXfree(void* _p)
+{
+  free(_p);
+}
 
 /* ---- vectors ---------------------------------------------------------- */
 
-void vec__reserve(void **data, u32 *cap, u32 need, size_t elem_size) {
-    if (need <= *cap) return;
-    u32 ncap = *cap ? *cap : 8;
-    while (ncap < need) {
-        if (ncap > UINT32_MAX / 2) nc_fatal("vector too large");
-        ncap *= 2;
-    }
-    *data = nc_xrealloc(*data, (size_t)ncap * elem_size);
-    *cap = ncap;
+void VecGrow(void** _data, u32* _cap, u32 _need, size_t _elemSize)
+{
+  if (_need <= *_cap)
+    return;
+  u32 ncap = *_cap ? *_cap : 8;
+  while (ncap < _need)
+  {
+    if (ncap > UINT32_MAX / 2)
+      NcFatal("vector too large");
+    ncap *= 2;
+  }
+  *_data = NcXrealloc(*_data, (size_t)ncap * _elemSize);
+  *_cap = ncap;
 }
 
 /* ---- buffers ---------------------------------------------------------- */
 
-void buf_free(Buf *b) {
-    nc_xfree(b->data);
-    memset(b, 0, sizeof *b);
+void BufFree(Buf* _b)
+{
+  NcXfree(_b->data);
+  memset(_b, 0, sizeof *_b);
 }
 
-void buf_reserve(Buf *b, u32 need) {
-    if (need <= b->cap) return;
-    u32 ncap = b->cap ? b->cap : 64;
-    while (ncap < need) {
-        if (ncap > UINT32_MAX / 2) nc_fatal("buffer too large");
-        ncap *= 2;
-    }
-    b->data = nc_xrealloc(b->data, ncap);
-    b->cap = ncap;
+void BufReserve(Buf* _b, u32 _need)
+{
+  if (_need <= _b->cap)
+    return;
+  u32 ncap = _b->cap ? _b->cap : 64;
+  while (ncap < _need)
+  {
+    if (ncap > UINT32_MAX / 2)
+      NcFatal("buffer too large");
+    ncap *= 2;
+  }
+  _b->data = NcXrealloc(_b->data, ncap);
+  _b->cap = ncap;
 }
 
-void buf_bytes(Buf *b, const void *p, u32 n) {
-    if (!n) return;
-    buf_reserve(b, b->len + n);
-    memcpy(b->data + b->len, p, n);
-    b->len += n;
+void BufBytes(Buf* _b, const void* _p, u32 _n)
+{
+  if (!_n)
+    return;
+  BufReserve(_b, _b->len + _n);
+  memcpy(_b->data + _b->len, _p, _n);
+  _b->len += _n;
 }
 
-void buf_zeros(Buf *b, u32 n) {
-    if (!n) return;
-    buf_reserve(b, b->len + n);
-    memset(b->data + b->len, 0, n);
-    b->len += n;
+void BufZeros(Buf* _b, u32 _n)
+{
+  if (!_n)
+    return;
+  BufReserve(_b, _b->len + _n);
+  memset(_b->data + _b->len, 0, _n);
+  _b->len += _n;
 }
 
-void buf_align(Buf *b, u32 align, u8 fill) {
-    NC_ASSERT(NC_IS_POW2(align));
-    while (b->len & (align - 1)) buf_u8(b, fill);
+void BufAlign(Buf* _b, u32 _align, u8 _fill)
+{
+  NC_ASSERT(NC_IS_POW2(_align));
+  while (_b->len & (_align - 1))
+    BufU8(_b, _fill);
 }
 
-void buf_str0(Buf *b, const char *s) { buf_bytes(b, s, (u32)strlen(s) + 1); }
+void BufStr0(Buf* _b, const char* _s)
+{
+  BufBytes(_b, _s, (u32)strlen(_s) + 1);
+}
 
 /* ---- CRC-32 (reflected, poly 0xEDB88320) ------------------------------- */
 
-static u32 crc_table[256];
-static bool crc_ready;
+static u32 g_crcTable[256];
+static bool g_crcReady;
 
-static void crc_init(void) {
-    for (u32 i = 0; i < 256; i++) {
-        u32 c = i;
-        for (int k = 0; k < 8; k++) c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
-        crc_table[i] = c;
-    }
-    crc_ready = true;
+static void CrcInit(void)
+{
+  for (u32 i = 0; i < 256; i++)
+  {
+    u32 c = i;
+    for (int k = 0; k < 8; k++)
+      c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+    g_crcTable[i] = c;
+  }
+  g_crcReady = true;
 }
 
-u32 nc_crc32_update(u32 crc, const void *data, size_t n) {
-    if (!crc_ready) crc_init();
-    const u8 *p = data;
-    for (size_t i = 0; i < n; i++) crc = crc_table[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
-    return crc;
+u32 Crc32Update(u32 _crc, const void* _data, size_t _n)
+{
+  if (!g_crcReady)
+    CrcInit();
+  const u8* p = _data;
+  for (size_t i = 0; i < _n; i++)
+    _crc = g_crcTable[(_crc ^ p[i]) & 0xFF] ^ (_crc >> 8);
+  return _crc;
 }
 
-u32 nc_jamcrc(const void *data, size_t n) { return nc_crc32_update(0xFFFFFFFFu, data, n); }
+u32 Crc32Jam(const void* _data, size_t _n)
+{
+  return Crc32Update(0xFFFFFFFFu, _data, _n);
+}

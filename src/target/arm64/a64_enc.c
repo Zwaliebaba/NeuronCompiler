@@ -6,327 +6,417 @@
 #include <math.h>
 #include <stdio.h>
 
-const A64InsnInfo a64_insn_info[A64_NUM_REAL] = {
-#define INSN(id, mn, form, bits, kd, kn, km, sz) [A64_##id] = {mn, bits, form, kd, kn, km, sz},
+const A64InsnInfo A64_INSN_INFO[A64OpRealCount] = {
+#define INSN(id, mn, form, bits, kd, kn, km, sz) [A64Op##id] = {mn, bits, form, kd, kn, km, sz},
 #include "arm64.def"
 #undef INSN
 };
 
-const char *const a64_op_names[A64_NUM_OPS] = {
-#define INSN(id, mn, form, bits, kd, kn, km, sz) [A64_##id] = #id,
+const char* const A64_OP_NAMES[A64OpCount] = {
+#define INSN(id, mn, form, bits, kd, kn, km, sz) [A64Op##id] = #id,
 #include "arm64.def"
 #undef INSN
-    [A64_P_LABEL] = "P_LABEL",
-    [A64_P_PROLOGUE] = "P_PROLOGUE",
-    [A64_P_EPILOGUE] = "P_EPILOGUE",
+  [A64OpPseudoLabel] = "P_LABEL",
+  [A64OpPseudoPrologue] = "P_PROLOGUE",
+  [A64OpPseudoEpilogue] = "P_EPILOGUE",
 };
 
-[[noreturn]] static void enc_fail(const MInst *mi, const char *what, i64 v) {
-    nc_fatal("internal error: cannot encode %s: %s (value %lld)", a64_op_names[mi->op], what,
-             (long long)v);
+[[noreturn]] static void enc_fail(const MirInst* _mi, const char* _what, i64 _v)
+{
+  NcFatal("internal error: cannot encode %s: %s (value %lld)", A64_OP_NAMES[_mi->op], _what, (long long)_v);
 }
 
-#define ENC_CHECK(mi, cond, what, v) \
-    do { if (!(cond)) enc_fail((mi), (what), (i64)(v)); } while (0)
+#define ENC_CHECK(mi, cond, what, v)    \
+  do                                    \
+  {                                     \
+    if (!(cond))                        \
+      enc_fail((mi), (what), (i64)(v)); \
+  } while (0)
 
 /* ---- logical immediates ------------------------------------------------- */
 
-static bool is_mask(u64 v) { return v && ((v + 1) & v) == 0; }
-static bool is_shifted_mask(u64 v) { return v && is_mask((v - 1) | v); }
-static u32 count_trailing_ones(u64 v) { return nc_ctz64(~v); }
-static u32 count_leading_ones(u64 v) { return nc_clz64(~v); }
-
-bool a64_encode_logical_imm(u64 imm, u32 width, u32 *n, u32 *immr, u32 *imms) {
-    NC_ASSERT(width == 32 || width == 64);
-    if (width == 32) {
-        if (imm >> 32) return false;
-        if (imm == 0 || imm == 0xFFFFFFFFu) return false;
-        imm |= imm << 32;
-    } else if (imm == 0 || imm == ~(u64)0) {
-        return false;
-    }
-    /* Find the smallest repeating element size. */
-    u32 size = 64;
-    do {
-        size /= 2;
-        u64 mask = ((u64)1 << size) - 1;
-        if ((imm & mask) != ((imm >> size) & mask)) {
-            size *= 2;
-            break;
-        }
-    } while (size > 2);
-
-    u64 mask = ~(u64)0 >> (64 - size);
-    u32 rot, ones;
-    imm &= mask;
-    if (is_shifted_mask(imm)) {
-        rot = nc_ctz64(imm);
-        ones = count_trailing_ones(imm >> rot);
-    } else {
-        imm |= ~mask;
-        if (!is_shifted_mask(~imm)) return false;
-        u32 clo = count_leading_ones(imm);
-        rot = 64 - clo;
-        ones = clo + count_trailing_ones(imm) - (64 - size);
-    }
-    u32 r = (size - rot) & (size - 1);
-    u64 nimms = ~(u64)(size - 1) << 1;
-    nimms |= (ones - 1);
-    u32 nbit = (u32)(((nimms >> 6) & 1) ^ 1);
-    if (width == 32 && nbit) return false;
-    *n = nbit;
-    *immr = r;
-    *imms = (u32)(nimms & 0x3F);
-    return true;
+static bool IsMask(u64 _v)
+{
+  return _v && ((_v + 1) & _v) == 0;
+}
+static bool IsShiftedMask(u64 _v)
+{
+  return _v && IsMask((_v - 1) | _v);
+}
+static u32 CountTrailingOnes(u64 _v)
+{
+  return NcCtz64(~_v);
+}
+static u32 CountLeadingOnes(u64 _v)
+{
+  return NcClz64(~_v);
 }
 
-u64 a64_decode_logical_imm(u32 n, u32 immr, u32 imms, u32 width) {
-    u32 combined = (n << 6) | (~imms & 0x3F);
-    NC_ASSERT(combined != 0);
-    u32 len = 31 - (u32)__builtin_clz(combined);
-    u32 size = 1u << len;
-    u32 r = immr & (size - 1);
-    u32 s = imms & (size - 1);
-    NC_ASSERT(s != size - 1);
-    u64 pattern = (s + 1 == 64) ? ~(u64)0 : (((u64)1 << (s + 1)) - 1);
-    if (r) {
-        u64 emask = size == 64 ? ~(u64)0 : (((u64)1 << size) - 1);
-        pattern = ((pattern >> r) | (pattern << (size - r))) & emask;
+bool A64EncodeLogicalImm(u64 _imm, u32 _width, u32* _n, u32* _immr, u32* _imms)
+{
+  NC_ASSERT(_width == 32 || _width == 64);
+  if (_width == 32)
+  {
+    if (_imm >> 32)
+      return false;
+    if (_imm == 0 || _imm == 0xFFFFFFFFu)
+      return false;
+    _imm |= _imm << 32;
+  }
+  else if (_imm == 0 || _imm == ~(u64)0)
+  {
+    return false;
+  }
+  /* Find the smallest repeating element size. */
+  u32 size = 64;
+  do
+  {
+    size /= 2;
+    u64 mask = ((u64)1 << size) - 1;
+    if ((_imm & mask) != ((_imm >> size) & mask))
+    {
+      size *= 2;
+      break;
     }
-    u64 v = 0;
-    for (u32 i = 0; i < width; i += size) v |= pattern << i;
-    return width == 64 ? v : (v & 0xFFFFFFFFu);
+  } while (size > 2);
+
+  u64 mask = ~(u64)0 >> (64 - size);
+  u32 rot, ones;
+  _imm &= mask;
+  if (IsShiftedMask(_imm))
+  {
+    rot = NcCtz64(_imm);
+    ones = CountTrailingOnes(_imm >> rot);
+  }
+  else
+  {
+    _imm |= ~mask;
+    if (!IsShiftedMask(~_imm))
+      return false;
+    u32 clo = CountLeadingOnes(_imm);
+    rot = 64 - clo;
+    ones = clo + CountTrailingOnes(_imm) - (64 - size);
+  }
+  u32 r = (size - rot) & (size - 1);
+  u64 nimms = ~(u64)(size - 1) << 1;
+  nimms |= (ones - 1);
+  u32 nbit = (u32)(((nimms >> 6) & 1) ^ 1);
+  if (_width == 32 && nbit)
+    return false;
+  *_n = nbit;
+  *_immr = r;
+  *_imms = (u32)(nimms & 0x3F);
+  return true;
+}
+
+u64 A64DecodeLogicalImm(u32 _n, u32 _immr, u32 _imms, u32 _width)
+{
+  NC_ASSERT(_width == 32 || _width == 64);
+  u32 combined = (_n << 6) | (~_imms & 0x3F);
+  NC_ASSERT(combined != 0);
+  u32 len = 31 - NC_CLZ32_NONZERO(combined);
+  u32 size = 1u << len;
+  u32 r = _immr & (size - 1);
+  u32 s = _imms & (size - 1);
+  NC_ASSERT(s != size - 1);
+  u64 pattern = (s + 1 == 64) ? ~(u64)0 : (((u64)1 << (s + 1)) - 1);
+  if (r)
+  {
+    u64 emask = size == 64 ? ~(u64)0 : (((u64)1 << size) - 1);
+    pattern = ((pattern >> r) | (pattern << (size - r))) & emask;
+  }
+  /* Replicate the element across the register by doubling: every shift
+     * amount is an element size below the register width, so below 64. */
+  for (u32 filled = size; filled < _width; filled *= 2)
+    pattern |= pattern << filled;
+  return _width == 64 ? pattern : (pattern & 0xFFFFFFFFu);
 }
 
 /* ---- floating-point immediates ------------------------------------------ */
 
-double a64_decode_fp_imm(u32 imm8) {
-    u64 a = (imm8 >> 7) & 1, b = (imm8 >> 6) & 1, cd = (imm8 >> 4) & 3, efgh = imm8 & 0xF;
-    u64 exp = b ? (0x3FCu | cd) : (0x400u | cd);
-    u64 bits = (a << 63) | (exp << 52) | (efgh << 48);
-    double d;
-    memcpy(&d, &bits, sizeof d);
-    return d;
+double A64DecodeFpImm(u32 _imm8)
+{
+  u64 a = (_imm8 >> 7) & 1, b = (_imm8 >> 6) & 1, cd = (_imm8 >> 4) & 3, efgh = _imm8 & 0xF;
+  u64 exp = b ? (0x3FCu | cd) : (0x400u | cd);
+  u64 bits = (a << 63) | (exp << 52) | (efgh << 48);
+  double d;
+  memcpy(&d, &bits, sizeof d);
+  return d;
 }
 
-bool a64_encode_fp_imm(double v, u32 *imm8) {
-    for (u32 i = 0; i < 256; i++) {
-        if (a64_decode_fp_imm(i) == v && signbit(a64_decode_fp_imm(i)) == signbit(v)) {
-            *imm8 = i;
-            return true;
-        }
+bool A64EncodeFpImm(double _v, u32* _imm8)
+{
+  for (u32 i = 0; i < 256; i++)
+  {
+    if (A64DecodeFpImm(i) == _v && signbit(A64DecodeFpImm(i)) == signbit(_v))
+    {
+      *_imm8 = i;
+      return true;
     }
-    return false;
+  }
+  return false;
 }
 
 /* ---- branch ranges ------------------------------------------------------ */
 
-i64 a64_branch_range(A64Op op) {
-    switch (a64_insn_info[op].form) {
-    case F_B: return (i64)1 << 27;
-    case F_BCOND:
-    case F_CB:
-    case F_LDR_LIT: return (i64)1 << 20;
-    case F_ADR: return op == A64_ADR ? (i64)1 << 20 : (i64)1 << 32;
-    case F_TB: return (i64)1 << 15;
-    default: return 0;
-    }
+i64 A64BranchRange(A64Op _op)
+{
+  switch (A64_INSN_INFO[_op].form)
+  {
+  case A64FormB:
+    return (i64)1 << 27;
+  case A64FormBcond:
+  case A64FormCb:
+  case A64FormLdrLit:
+    return (i64)1 << 20;
+  case A64FormAdr:
+    return _op == A64OpADR ? (i64)1 << 20 : (i64)1 << 32;
+  case A64FormTb:
+    return (i64)1 << 15;
+  default:
+    return 0;
+  }
 }
 
 /* ---- encoder ------------------------------------------------------------ */
 
-static u32 enc_pcrel(const MInst *mi, i64 pcrel, u32 bits, u32 shift) {
-    ENC_CHECK(mi, (pcrel & 3) == 0, "misaligned branch offset", pcrel);
-    i64 words = pcrel >> 2;
-    ENC_CHECK(mi, nc_fits_signed(words, bits), "branch offset out of range", pcrel);
-    return ((u32)words & ((1u << bits) - 1)) << shift;
+static u32 EncPcrel(const MirInst* _mi, i64 _pcrel, u32 _bits, u32 _shift)
+{
+  ENC_CHECK(_mi, (_pcrel & 3) == 0, "misaligned branch offset", _pcrel);
+  i64 words = _pcrel >> 2;
+  ENC_CHECK(_mi, NcFitsSigned(words, _bits), "branch offset out of range", _pcrel);
+  return ((u32)words & ((1u << _bits) - 1)) << _shift;
 }
 
-u32 a64_encode(const MInst *mi, i64 pcrel, u16 *reloc_type) {
-    NC_ASSERT(mi->op < A64_NUM_REAL);
-    const A64InsnInfo *ii = &a64_insn_info[mi->op];
-    u32 w = ii->bits;
-    u32 rd = mi->rd & 31, rn = mi->rn & 31, rm = mi->rm & 31, ra = mi->ra & 31;
-    bool sym = mi->tkind == TK_SYM;
-    *reloc_type = 0;
+u32 A64Encode(const MirInst* _mi, i64 _pcrel, u16* _relocType)
+{
+  NC_ASSERT(_mi->op < A64OpRealCount);
+  const A64InsnInfo* ii = &A64_INSN_INFO[_mi->op];
+  u32 w = ii->bits;
+  u32 rd = _mi->rd & 31, rn = _mi->rn & 31, rm = _mi->rm & 31, ra = _mi->ra & 31;
+  bool sym = _mi->tkind == A64TargetKindSym;
+  *_relocType = 0;
 
-    switch (ii->form) {
-    case F_PSEUDO: NC_UNREACHABLE();
+  switch (ii->form)
+  {
+  case A64FormPseudo:
+    NC_UNREACHABLE();
 
-    case F_ADDSUB_IMM:
-    case F_CMP_IMM: {
-        u32 dst = ii->form == F_CMP_IMM ? 0 : rd;
-        if (sym) {
-            ENC_CHECK(mi, mi->imm == 0, "symbol addend must be zero", mi->imm);
-            *reloc_type = mi->smod == SM_SECREL_HI12   ? IMAGE_REL_ARM64_SECREL_HIGH12A
-                          : mi->smod == SM_SECREL_LO12 ? IMAGE_REL_ARM64_SECREL_LOW12A
+  case A64FormAddsubImm:
+  case A64FormCmpImm:
+  {
+    u32 dst = ii->form == A64FormCmpImm ? 0 : rd;
+    if (sym)
+    {
+      ENC_CHECK(_mi, _mi->imm == 0, "symbol addend must be zero", _mi->imm);
+      *_relocType = _mi->smod == A64SymModSecrelHi12   ? IMAGE_REL_ARM64_SECREL_HIGH12A
+                    : _mi->smod == A64SymModSecrelLo12 ? IMAGE_REL_ARM64_SECREL_LOW12A
                                                        : IMAGE_REL_ARM64_PAGEOFFSET_12A;
-            /* SECREL_HIGH12A patches bits 12-23 of the section offset, so the
+      /* SECREL_HIGH12A patches bits 12-23 of the section offset, so the
              * add must be the shifted form (lsl #12). link.exe rejects the
              * relocation on an unshifted add (LNK2040); lld-link silently
              * patches it, producing a wrong address. */
-            u32 sh = mi->smod == SM_SECREL_HI12 ? 1u : 0u;
-            return w | sh << 22 | rn << 5 | dst;
-        }
-        u64 imm = (u64)mi->imm;
-        u32 sh = 0;
-        if (imm > 0xFFF) {
-            ENC_CHECK(mi, (imm & 0xFFF) == 0 && imm <= 0xFFF000, "add/sub immediate", mi->imm);
-            imm >>= 12;
-            sh = 1;
-        }
-        return w | sh << 22 | (u32)imm << 10 | rn << 5 | dst;
+      u32 sh = _mi->smod == A64SymModSecrelHi12 ? 1u : 0u;
+      return w | sh << 22 | rn << 5 | dst;
     }
-    case F_MOV_SP: return w | rn << 5 | rd;
+    u64 imm = (u64)_mi->imm;
+    u32 sh = 0;
+    if (imm > 0xFFF)
+    {
+      ENC_CHECK(_mi, (imm & 0xFFF) == 0 && imm <= 0xFFF000, "add/sub immediate", _mi->imm);
+      imm >>= 12;
+      sh = 1;
+    }
+    return w | sh << 22 | (u32)imm << 10 | rn << 5 | dst;
+  }
+  case A64FormMovSp:
+    return w | rn << 5 | rd;
 
-    case F_LOGIC_IMM:
-    case F_TST_IMM: {
-        u32 width = (w >> 31) ? 64 : 32, n, immr, imms;
-        ENC_CHECK(mi, a64_encode_logical_imm((u64)mi->imm, width, &n, &immr, &imms),
-                  "not a logical immediate", mi->imm);
-        u32 dst = ii->form == F_TST_IMM ? 0 : rd;
-        return w | n << 22 | immr << 16 | imms << 10 | rn << 5 | dst;
-    }
+  case A64FormLogicImm:
+  case A64FormTstImm:
+  {
+    u32 width = (w >> 31) ? 64 : 32, n, immr, imms;
+    ENC_CHECK(_mi, A64EncodeLogicalImm((u64)_mi->imm, width, &n, &immr, &imms), "not a logical immediate", _mi->imm);
+    u32 dst = ii->form == A64FormTstImm ? 0 : rd;
+    return w | n << 22 | immr << 16 | imms << 10 | rn << 5 | dst;
+  }
 
-    case F_MOVW: {
-        ENC_CHECK(mi, mi->imm >= 0 && mi->imm <= 0xFFFF, "movw immediate", mi->imm);
-        u32 max_shift = (w >> 31) ? 48 : 16;
-        ENC_CHECK(mi, mi->amount % 16 == 0 && mi->amount <= max_shift, "movw shift", mi->amount);
-        return w | (u32)(mi->amount / 16) << 21 | (u32)mi->imm << 5 | rd;
-    }
+  case A64FormMovw:
+  {
+    ENC_CHECK(_mi, _mi->imm >= 0 && _mi->imm <= 0xFFFF, "movw immediate", _mi->imm);
+    u32 maxShift = (w >> 31) ? 48 : 16;
+    ENC_CHECK(_mi, _mi->amount % 16 == 0 && _mi->amount <= maxShift, "movw shift", _mi->amount);
+    return w | (u32)(_mi->amount / 16) << 21 | (u32)_mi->imm << 5 | rd;
+  }
 
-    case F_ADR: {
-        if (sym) {
-            ENC_CHECK(mi, mi->imm == 0, "symbol addend must be zero", mi->imm);
-            *reloc_type =
-                mi->op == A64_ADRP ? IMAGE_REL_ARM64_PAGEBASE_REL21 : IMAGE_REL_ARM64_REL21;
-            return w | rd;
-        }
-        i64 v = pcrel;
-        if (mi->op == A64_ADRP) {
-            ENC_CHECK(mi, (v & 0xFFF) == 0, "adrp offset not page aligned", v);
-            v >>= 12;
-        }
-        ENC_CHECK(mi, nc_fits_signed(v, 21), "adr offset out of range", pcrel);
-        u32 u = (u32)v & 0x1FFFFF;
-        return w | (u & 3) << 29 | (u >> 2) << 5 | rd;
+  case A64FormAdr:
+  {
+    if (sym)
+    {
+      ENC_CHECK(_mi, _mi->imm == 0, "symbol addend must be zero", _mi->imm);
+      *_relocType = _mi->op == A64OpADRP ? IMAGE_REL_ARM64_PAGEBASE_REL21 : IMAGE_REL_ARM64_REL21;
+      return w | rd;
     }
+    i64 v = _pcrel;
+    if (_mi->op == A64OpADRP)
+    {
+      ENC_CHECK(_mi, (v & 0xFFF) == 0, "adrp offset not page aligned", v);
+      v >>= 12;
+    }
+    ENC_CHECK(_mi, NcFitsSigned(v, 21), "adr offset out of range", _pcrel);
+    u32 u = (u32)v & 0x1FFFFF;
+    return w | (u & 3) << 29 | (u >> 2) << 5 | rd;
+  }
 
-    case F_BITFIELD: {
-        u32 lim = (w >> 31) ? 63 : 31;
-        ENC_CHECK(mi, mi->imm >= 0 && mi->imm <= lim, "bitfield immr", mi->imm);
-        ENC_CHECK(mi, mi->amount <= lim, "bitfield imms", mi->amount);
-        return w | (u32)mi->imm << 16 | (u32)mi->amount << 10 | rn << 5 | rd;
+  case A64FormBitfield:
+  {
+    u32 lim = (w >> 31) ? 63 : 31;
+    ENC_CHECK(_mi, _mi->imm >= 0 && _mi->imm <= lim, "bitfield immr", _mi->imm);
+    ENC_CHECK(_mi, _mi->amount <= lim, "bitfield imms", _mi->amount);
+    return w | (u32)_mi->imm << 16 | (u32)_mi->amount << 10 | rn << 5 | rd;
+  }
+  case A64FormLslImm:
+  case A64FormLsrImm:
+  {
+    u32 width = (w >> 31) ? 64 : 32;
+    ENC_CHECK(_mi, _mi->amount < width, "shift amount", _mi->amount);
+    u32 s = _mi->amount, immr, imms;
+    if (ii->form == A64FormLslImm)
+    {
+      immr = (width - s) & (width - 1);
+      imms = width - 1 - s;
     }
-    case F_LSL_IMM:
-    case F_LSR_IMM: {
-        u32 width = (w >> 31) ? 64 : 32;
-        ENC_CHECK(mi, mi->amount < width, "shift amount", mi->amount);
-        u32 s = mi->amount, immr, imms;
-        if (ii->form == F_LSL_IMM) {
-            immr = (width - s) & (width - 1);
-            imms = width - 1 - s;
-        } else {
-            immr = s;
-            imms = width - 1;
-        }
-        return w | immr << 16 | imms << 10 | rn << 5 | rd;
+    else
+    {
+      immr = s;
+      imms = width - 1;
     }
-    case F_EXTEND: return w | rn << 5 | rd;
+    return w | immr << 16 | imms << 10 | rn << 5 | rd;
+  }
+  case A64FormExtend:
+    return w | rn << 5 | rd;
 
-    case F_LOGIC_REG:
-    case F_ADDSUB_REG:
-    case F_CMP_REG:
-    case F_MOV_REG:
-    case F_NEG: {
-        u32 width = (w >> 31) ? 64 : 32;
-        ENC_CHECK(mi, mi->amount < width, "shift amount", mi->amount);
-        bool arith = ii->form == F_ADDSUB_REG || ii->form == F_NEG ||
-                     (ii->form == F_CMP_REG && mi->op != A64_TSTXrs && mi->op != A64_TSTWrs);
-        ENC_CHECK(mi, !arith || mi->shift != SH_ROR, "ror not allowed", mi->shift);
-        u32 dst = ii->form == F_CMP_REG ? 0 : rd;
-        u32 src1 = (ii->form == F_MOV_REG || ii->form == F_NEG) ? 0 : rn;
-        return w | (u32)mi->shift << 22 | rm << 16 | (u32)mi->amount << 10 | src1 << 5 | dst;
-    }
-    case F_ADDSUB_EXT:
-        ENC_CHECK(mi, mi->amount <= 4, "extend shift", mi->amount);
-        return w | rm << 16 | (u32)(mi->shift & 7) << 13 | (u32)mi->amount << 10 | rn << 5 | rd;
+  case A64FormLogicReg:
+  case A64FormAddsubReg:
+  case A64FormCmpReg:
+  case A64FormMovReg:
+  case A64FormNeg:
+  {
+    u32 width = (w >> 31) ? 64 : 32;
+    ENC_CHECK(_mi, _mi->amount < width, "shift amount", _mi->amount);
+    bool arith = ii->form == A64FormAddsubReg || ii->form == A64FormNeg ||
+                 (ii->form == A64FormCmpReg && _mi->op != A64OpTSTXrs && _mi->op != A64OpTSTWrs);
+    ENC_CHECK(_mi, !arith || _mi->shift != A64ShiftRor, "ror not allowed", _mi->shift);
+    u32 dst = ii->form == A64FormCmpReg ? 0 : rd;
+    u32 src1 = (ii->form == A64FormMovReg || ii->form == A64FormNeg) ? 0 : rn;
+    return w | (u32)_mi->shift << 22 | rm << 16 | (u32)_mi->amount << 10 | src1 << 5 | dst;
+  }
+  case A64FormAddsubExt:
+    ENC_CHECK(_mi, _mi->amount <= 4, "extend shift", _mi->amount);
+    return w | rm << 16 | (u32)(_mi->shift & 7) << 13 | (u32)_mi->amount << 10 | rn << 5 | rd;
 
-    case F_DP3: return w | rm << 16 | ra << 10 | rn << 5 | rd;
-    case F_DP3_NOA:
-    case F_DP2:
-    case F_FP2: return w | rm << 16 | rn << 5 | rd;
-    case F_CSEL: return w | rm << 16 | (u32)(mi->shift & 15) << 12 | rn << 5 | rd;
-    case F_CSET: {
-        ENC_CHECK(mi, (mi->shift & 14) != 14, "cset with al/nv", mi->shift);
-        return w | (u32)a64_cond_invert((A64Cond)mi->shift) << 12 | rd;
-    }
-    case F_DP1:
-    case F_FP1: return w | rn << 5 | rd;
+  case A64FormDp3:
+    return w | rm << 16 | ra << 10 | rn << 5 | rd;
+  case A64FormDp3Noa:
+  case A64FormDp2:
+  case A64FormFp2:
+    return w | rm << 16 | rn << 5 | rd;
+  case A64FormCsel:
+    return w | rm << 16 | (u32)(_mi->shift & 15) << 12 | rn << 5 | rd;
+  case A64FormCset:
+  {
+    ENC_CHECK(_mi, (_mi->shift & 14) != 14, "cset with al/nv", _mi->shift);
+    return w | (u32)A64CondInvert((A64Cond)_mi->shift) << 12 | rd;
+  }
+  case A64FormDp1:
+  case A64FormFp1:
+    return w | rn << 5 | rd;
 
-    case F_LDST_UIMM: {
-        if (sym) {
-            ENC_CHECK(mi, mi->imm == 0, "symbol addend must be zero", mi->imm);
-            *reloc_type = mi->smod == SM_SECREL_LO12 ? IMAGE_REL_ARM64_SECREL_LOW12L
-                                                     : IMAGE_REL_ARM64_PAGEOFFSET_12L;
-            return w | rn << 5 | rd;
-        }
-        i64 off = mi->imm;
-        ENC_CHECK(mi, off >= 0 && (off & ((1 << ii->sz) - 1)) == 0, "scaled offset", off);
-        ENC_CHECK(mi, (off >> ii->sz) <= 0xFFF, "scaled offset range", off);
-        return w | (u32)(off >> ii->sz) << 10 | rn << 5 | rd;
+  case A64FormLdstUimm:
+  {
+    if (sym)
+    {
+      ENC_CHECK(_mi, _mi->imm == 0, "symbol addend must be zero", _mi->imm);
+      *_relocType = _mi->smod == A64SymModSecrelLo12 ? IMAGE_REL_ARM64_SECREL_LOW12L : IMAGE_REL_ARM64_PAGEOFFSET_12L;
+      return w | rn << 5 | rd;
     }
-    case F_LDST_PRE:
-    case F_LDST_POST:
-    case F_LDST_UNSCALED:
-        ENC_CHECK(mi, nc_fits_signed(mi->imm, 9), "9-bit offset", mi->imm);
-        return w | ((u32)mi->imm & 0x1FF) << 12 | rn << 5 | rd;
-    case F_LDST_REG: {
-        A64Extend ex = (A64Extend)mi->shift;
-        ENC_CHECK(mi, ex == EX_UXTW || ex == EX_UXTX || ex == EX_SXTW || ex == EX_SXTX,
-                  "register-offset extend", ex);
-        ENC_CHECK(mi, mi->amount <= 1, "register-offset S bit", mi->amount);
-        return w | rm << 16 | (u32)ex << 13 | (u32)mi->amount << 12 | rn << 5 | rd;
-    }
-    case F_LDST_PAIR:
-    case F_LDST_PAIR_PRE:
-    case F_LDST_PAIR_POST: {
-        i64 off = mi->imm;
-        i64 scale = (i64)1 << ii->sz;
-        ENC_CHECK(mi, off % scale == 0, "pair offset alignment", off);
-        ENC_CHECK(mi, nc_fits_signed(off / scale, 7), "pair offset range", off);
-        return w | ((u32)(off / scale) & 0x7F) << 15 | ra << 10 | rn << 5 | rd;
-    }
-    case F_LDR_LIT:
-        ENC_CHECK(mi, !sym, "ldr literal to a symbol", 0);
-        return w | enc_pcrel(mi, pcrel, 19, 5) | rd;
+    i64 off = _mi->imm;
+    ENC_CHECK(_mi, off >= 0 && (off & ((1 << ii->accessSizeLog2) - 1)) == 0, "scaled offset", off);
+    ENC_CHECK(_mi, (off >> ii->accessSizeLog2) <= 0xFFF, "scaled offset range", off);
+    return w | (u32)(off >> ii->accessSizeLog2) << 10 | rn << 5 | rd;
+  }
+  case A64FormLdstPre:
+  case A64FormLdstPost:
+  case A64FormLdstUnscaled:
+    ENC_CHECK(_mi, NcFitsSigned(_mi->imm, 9), "9-bit offset", _mi->imm);
+    return w | ((u32)_mi->imm & 0x1FF) << 12 | rn << 5 | rd;
+  case A64FormLdstReg:
+  {
+    A64Extend ex = (A64Extend)_mi->shift;
+    ENC_CHECK(_mi, ex == A64ExtendUxtw || ex == A64ExtendUxtx || ex == A64ExtendSxtw || ex == A64ExtendSxtx, "register-offset extend", ex);
+    ENC_CHECK(_mi, _mi->amount <= 1, "register-offset S bit", _mi->amount);
+    return w | rm << 16 | (u32)ex << 13 | (u32)_mi->amount << 12 | rn << 5 | rd;
+  }
+  case A64FormLdstPair:
+  case A64FormLdstPairPre:
+  case A64FormLdstPairPost:
+  {
+    i64 off = _mi->imm;
+    i64 scale = (i64)1 << ii->accessSizeLog2;
+    ENC_CHECK(_mi, off % scale == 0, "pair offset alignment", off);
+    ENC_CHECK(_mi, NcFitsSigned(off / scale, 7), "pair offset range", off);
+    return w | ((u32)(off / scale) & 0x7F) << 15 | ra << 10 | rn << 5 | rd;
+  }
+  case A64FormLdrLit:
+    ENC_CHECK(_mi, !sym, "ldr literal to a symbol", 0);
+    return w | EncPcrel(_mi, _pcrel, 19, 5) | rd;
 
-    case F_B:
-        if (sym) { *reloc_type = IMAGE_REL_ARM64_BRANCH26; return w; }
-        return w | enc_pcrel(mi, pcrel, 26, 0);
-    case F_BCOND:
-        if (sym) { *reloc_type = IMAGE_REL_ARM64_BRANCH19; return w | (mi->shift & 15); }
-        return w | enc_pcrel(mi, pcrel, 19, 5) | (mi->shift & 15);
-    case F_CB:
-        if (sym) { *reloc_type = IMAGE_REL_ARM64_BRANCH19; return w | rd; }
-        return w | enc_pcrel(mi, pcrel, 19, 5) | rd;
-    case F_TB: {
-        ENC_CHECK(mi, mi->imm >= 0 && mi->imm < 64, "tbz bit", mi->imm);
-        u32 b = (u32)mi->imm;
-        w |= (b >> 5) << 31 | (b & 31) << 19 | rd;
-        if (sym) { *reloc_type = IMAGE_REL_ARM64_BRANCH14; return w; }
-        return w | enc_pcrel(mi, pcrel, 14, 5);
+  case A64FormB:
+    if (sym)
+    {
+      *_relocType = IMAGE_REL_ARM64_BRANCH26;
+      return w;
     }
-    case F_BR:
-    case F_RET: return w | rn << 5;
-    case F_SYS: return w;
-    case F_BRK:
-        ENC_CHECK(mi, mi->imm >= 0 && mi->imm <= 0xFFFF, "brk immediate", mi->imm);
-        return w | (u32)mi->imm << 5;
-    case F_FCMP: return w | rm << 16 | rn << 5;
-    case F_FMOV_IMM:
-        ENC_CHECK(mi, mi->imm >= 0 && mi->imm <= 0xFF, "fp imm8", mi->imm);
-        return w | (u32)mi->imm << 13 | rd;
+    return w | EncPcrel(_mi, _pcrel, 26, 0);
+  case A64FormBcond:
+    if (sym)
+    {
+      *_relocType = IMAGE_REL_ARM64_BRANCH19;
+      return w | (_mi->shift & 15);
     }
-    NC_UNREACHABLE();
+    return w | EncPcrel(_mi, _pcrel, 19, 5) | (_mi->shift & 15);
+  case A64FormCb:
+    if (sym)
+    {
+      *_relocType = IMAGE_REL_ARM64_BRANCH19;
+      return w | rd;
+    }
+    return w | EncPcrel(_mi, _pcrel, 19, 5) | rd;
+  case A64FormTb:
+  {
+    ENC_CHECK(_mi, _mi->imm >= 0 && _mi->imm < 64, "tbz bit", _mi->imm);
+    u32 b = (u32)_mi->imm;
+    w |= (b >> 5) << 31 | (b & 31) << 19 | rd;
+    if (sym)
+    {
+      *_relocType = IMAGE_REL_ARM64_BRANCH14;
+      return w;
+    }
+    return w | EncPcrel(_mi, _pcrel, 14, 5);
+  }
+  case A64FormBr:
+  case A64FormRet:
+    return w | rn << 5;
+  case A64FormSys:
+    return w;
+  case A64FormBrk:
+    ENC_CHECK(_mi, _mi->imm >= 0 && _mi->imm <= 0xFFFF, "brk immediate", _mi->imm);
+    return w | (u32)_mi->imm << 5;
+  case A64FormFcmp:
+    return w | rm << 16 | rn << 5;
+  case A64FormFmovImm:
+    ENC_CHECK(_mi, _mi->imm >= 0 && _mi->imm <= 0xFF, "fp imm8", _mi->imm);
+    return w | (u32)_mi->imm << 13 | rd;
+  }
+  NC_UNREACHABLE();
 }

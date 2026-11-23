@@ -12,369 +12,498 @@
 
 #include <stdlib.h>
 
-typedef VEC(MInst) MInstVec;
+typedef VEC(MirInst) MirInstVec;
 
-static const u8 regs_a[] = {0, 1, 7, 17, 29, 30, 31};
+static const u8 REGS_A[] = {0, 1, 7, 17, 29, 30, 31};
 
-static void add(MInstVec *v, MInst mi) { vec_push(v, mi); }
-
-static MInst mk(A64Op op) { return (MInst){.op = op}; }
-
-static void gen_regs3(MInstVec *v, A64Op op, MInst base) {
-    for (u32 i = 0; i < NC_ARRAY_LEN(regs_a); i++) {
-        MInst m = base;
-        m.op = op;
-        m.rd = regs_a[i];
-        m.rn = regs_a[(i + 2) % NC_ARRAY_LEN(regs_a)];
-        m.rm = regs_a[(i + 4) % NC_ARRAY_LEN(regs_a)];
-        m.ra = regs_a[(i + 5) % NC_ARRAY_LEN(regs_a)];
-        add(v, m);
-    }
+static void Add(MirInstVec* _v, MirInst _mi)
+{
+  VEC_PUSH(_v, _mi);
 }
 
-static void gen(MInstVec *v, A64Op op) {
-    const A64InsnInfo *ii = &a64_insn_info[op];
-    bool x64 = (ii->bits >> 31) != 0;
-    u32 width = x64 ? 64 : 32;
-    MInst m = mk(op);
-    switch (ii->form) {
-    case F_PSEUDO: break;
-    case F_ADDSUB_IMM:
-    case F_CMP_IMM: {
-        static const i64 imms[] = {0, 1, 4095, 4096, 0x123000, 0xFFF000};
-        for (u32 i = 0; i < NC_ARRAY_LEN(imms); i++) {
-            m.rd = regs_a[i % 7]; m.rn = regs_a[(i + 3) % 7]; m.imm = imms[i];
-            add(v, m);
-        }
-        break;
-    }
-    case F_MOV_SP:
-        m.rd = 31; m.rn = 0; add(v, m);
-        m.rd = 29; m.rn = 31; add(v, m);
-        m.rd = 31; m.rn = 29; add(v, m);
-        break;
-    case F_LOGIC_IMM:
-    case F_TST_IMM: {
-        static const u64 vals[] = {1, 0xFF, 0xFFFF0000FFFF0000ull, 0x5555555555555555ull,
-                                   0x7FFFFFFFFFFFFFFEull, 0x00000000F0F0F0F0ull, 0x7FFFFFFF,
-                                   0x8000000000000000ull, 0x3C, 0xFFFFFFFFFFFFFF00ull};
-        for (u32 i = 0; i < NC_ARRAY_LEN(vals); i++) {
-            u32 n, r, s;
-            if (!a64_encode_logical_imm(vals[i], width, &n, &r, &s)) continue;
-            m.rd = regs_a[i % 7];
-            if (ii->kd == K_X && m.rd == 31) m.rd = 3; /* ands xzr is tst, printed differently */
-            m.rn = regs_a[(i + 1) % 6];
-            m.imm = (i64)vals[i];
-            add(v, m);
-        }
-        break;
-    }
-    case F_MOVW: {
-        static const i64 imms[] = {0, 1, 0xFFFF, 0x1234};
-        for (u32 s = 0; s < width; s += 16)
-            for (u32 i = 0; i < NC_ARRAY_LEN(imms); i++) {
-                m.rd = regs_a[(i + s / 16) % 7]; m.imm = imms[i]; m.amount = (u8)s;
-                add(v, m);
-            }
-        break;
-    }
-    case F_ADR: {
-        static const i64 adr[] = {0, 4, -4, 1048572, -1048576, 12345};
-        static const i64 adrp[] = {0, 4096, -4096, 0x7FFFF000, -0x80000000LL};
-        const i64 *t = op == A64_ADR ? adr : adrp;
-        u32 n = op == A64_ADR ? NC_ARRAY_LEN(adr) : NC_ARRAY_LEN(adrp);
-        for (u32 i = 0; i < n; i++) {
-            m.rd = regs_a[i % 7]; m.tkind = TK_OFFSET; m.imm = t[i];
-            add(v, m);
-        }
-        break;
-    }
-    case F_BITFIELD: {
-        u32 hi = width - 1;
-        u32 pairs[][2] = {{0, 0}, {3, 7}, {hi, hi - 1}, {1, hi}};
-        for (u32 i = 0; i < NC_ARRAY_LEN(pairs); i++) {
-            m.rd = regs_a[i]; m.rn = regs_a[i + 2]; m.imm = pairs[i][0];
-            m.amount = (u8)pairs[i][1];
-            add(v, m);
-        }
-        break;
-    }
-    case F_LSL_IMM:
-    case F_LSR_IMM: {
-        u32 amts[] = {1, 5, width - 1};
-        for (u32 i = 0; i < 3; i++) {
-            m.rd = regs_a[i]; m.rn = regs_a[i + 3]; m.amount = (u8)amts[i];
-            add(v, m);
-        }
-        break;
-    }
-    case F_EXTEND:
-    case F_DP1:
-    case F_FP1:
-    case F_DP3:
-    case F_DP3_NOA:
-    case F_DP2:
-    case F_FP2:
-    case F_FCMP: gen_regs3(v, op, m); break;
-    case F_LOGIC_REG:
-    case F_ADDSUB_REG:
-    case F_CMP_REG:
-    case F_MOV_REG:
-    case F_NEG: {
-        bool arith = ii->form == F_ADDSUB_REG || ii->form == F_NEG ||
-                     (ii->form == F_CMP_REG && op != A64_TSTXrs && op != A64_TSTWrs);
-        bool is_mov = op == A64_MOVXr || op == A64_MOVWr;
-        for (u32 sh = 0; sh < 4; sh++) {
-            if (arith && sh == SH_ROR) continue;
-            u32 amts[] = {0, 3, width - 1};
-            for (u32 a = 0; a < 3; a++) {
-                if (is_mov && (amts[a] || sh != SH_LSL)) continue;
-                m.rd = regs_a[(sh + a) % 7]; m.rn = regs_a[(sh + a + 2) % 7];
-                m.rm = regs_a[(sh + a + 4) % 7];
-                if (ii->form == F_LOGIC_REG && op == A64_ANDSXrs && m.rd == 31) m.rd = 2;
-                if (ii->form == F_LOGIC_REG && op == A64_ANDSWrs && m.rd == 31) m.rd = 2;
-                if ((op == A64_SUBSXrs || op == A64_SUBSWrs || op == A64_ADDSXrs ||
-                     op == A64_ADDSWrs) && m.rd == 31) m.rd = 2;
-                if ((op == A64_SUBXrs || op == A64_SUBWrs) && m.rn == 31) m.rn = 4; /* neg alias */
-                if ((op == A64_ORRXrs || op == A64_ORRWrs) && m.rn == 31) m.rn = 4; /* mov alias */
-                if ((op == A64_ORNXrs) && m.rn == 31) m.rn = 4;                    /* mvn alias */
-                m.shift = (u8)sh; m.amount = (u8)amts[a];
-                add(v, m);
-            }
-        }
-        break;
-    }
-    case F_ADDSUB_EXT: {
-        static const A64Extend exs[] = {EX_UXTW, EX_SXTW, EX_UXTX, EX_SXTX, EX_UXTB, EX_SXTH};
-        static const u8 rds[] = {31, 0, 31, 5, 7, 17};
-        static const u8 rns[] = {31, 31, 1, 6, 31, 2};
-        for (u32 i = 0; i < NC_ARRAY_LEN(exs); i++)
-            for (u8 amt = 0; amt <= 4; amt += 2) {
-                m.rd = rds[i]; m.rn = rns[i]; m.rm = (u8)(i + 9); m.shift = exs[i];
-                m.amount = amt;
-                add(v, m);
-            }
-        break;
-    }
-    case F_CSEL:
-    case F_CSET: {
-        static const A64Cond cs[] = {CC_EQ, CC_NE, CC_LT, CC_GT, CC_HS, CC_LS, CC_VS};
-        for (u32 i = 0; i < NC_ARRAY_LEN(cs); i++) {
-            m.rd = regs_a[i]; m.rn = regs_a[(i + 1) % 7]; m.rm = regs_a[(i + 2) % 7];
-            if (ii->form == F_CSEL && (op == A64_CSINCX || op == A64_CSINVX || op == A64_CSNEGX ||
-                                       op == A64_CSINCW) && m.rn == m.rm) m.rm = 4;
-            if (ii->form == F_CSEL && m.rn == 31 && m.rm == 31) m.rm = 4;
-            m.shift = cs[i];
-            add(v, m);
-        }
-        break;
-    }
-    case F_LDST_UIMM: {
-        i64 s = (i64)1 << ii->sz;
-        i64 offs[] = {0, s, 4095 * s, 17 * s};
-        for (u32 i = 0; i < 4; i++) {
-            m.rd = regs_a[i + 1]; m.rn = i == 0 ? 31 : regs_a[i + 2]; m.imm = offs[i];
-            add(v, m);
-        }
-        break;
-    }
-    case F_LDST_PRE:
-    case F_LDST_POST:
-    case F_LDST_UNSCALED: {
-        static const i64 offs[] = {-256, -16, 0, 8, 255};
-        for (u32 i = 0; i < NC_ARRAY_LEN(offs); i++) {
-            m.rd = (u8)(i + 1); m.rn = i == 1 ? 31 : (u8)(i + 10); m.imm = offs[i];
-            add(v, m);
-        }
-        break;
-    }
-    case F_LDST_REG: {
-        static const A64Extend exs[] = {EX_UXTW, EX_SXTW, EX_UXTX, EX_SXTX};
-        for (u32 i = 0; i < 4; i++)
-            for (u8 s = 0; s <= 1; s++) {
-                m.rd = (u8)(i + 1); m.rn = i == 2 ? 31 : (u8)(i + 10); m.rm = (u8)(i + 20);
-                m.shift = exs[i]; m.amount = s;
-                add(v, m);
-            }
-        break;
-    }
-    case F_LDST_PAIR:
-    case F_LDST_PAIR_PRE:
-    case F_LDST_PAIR_POST: {
-        i64 s = (i64)1 << ii->sz;
-        i64 ks[] = {-64, -2, 0, 1, 63};
-        for (u32 i = 0; i < NC_ARRAY_LEN(ks); i++) {
-            m.rd = (u8)(19 + i); m.ra = (u8)(i == 2 ? 30 : 1 + i); m.rn = i < 2 ? 31 : (u8)(9 + i);
-            m.imm = ks[i] * s;
-            add(v, m);
-        }
-        break;
-    }
-    case F_LDR_LIT:
-    case F_B:
-    case F_BCOND:
-    case F_CB: {
-        i64 lim = a64_branch_range(op);
-        i64 offs[] = {0, 4, -4, lim - 4, -lim, 4096};
-        for (u32 i = 0; i < NC_ARRAY_LEN(offs); i++) {
-            m.tkind = TK_OFFSET; m.imm = offs[i]; m.rd = regs_a[i];
-            m.shift = (u8)(i * 3 % 14);
-            add(v, m);
-        }
-        break;
-    }
-    case F_TB: {
-        static const i64 bits[] = {0, 5, 31, 32, 63};
-        static const i64 offs[] = {0, 32764, -32768, 8, -4};
-        for (u32 i = 0; i < 5; i++) {
-            m.rd = regs_a[i]; m.imm = bits[i]; m.tkind = TK_OFFSET;
-            m.target = 0;
-            MInst t = m;
-            t.imm = bits[i];
-            /* pcrel travels separately; stash it in .target for the driver below */
-            t.target = (u32)(offs[i] & 0xFFFFFFFF);
-            add(v, t);
-        }
-        break;
-    }
-    case F_BR:
-    case F_RET:
-        for (u32 i = 0; i < 6; i++) { m.rn = regs_a[i]; add(v, m); }
-        break;
-    case F_SYS: add(v, m); break;
-    case F_BRK:
-        m.imm = 0; add(v, m); m.imm = 0xF000; add(v, m); m.imm = 0xFFFF; add(v, m);
-        break;
-    case F_FMOV_IMM: {
-        static const u8 imms[] = {0x70, 0x00, 0x80, 0x1F, 0xFF, 0x60};
-        for (u32 i = 0; i < NC_ARRAY_LEN(imms); i++) { m.rd = (u8)i; m.imm = imms[i]; add(v, m); }
-        break;
-    }
-    }
+static MirInst Mk(A64Op _op)
+{
+  return (MirInst){.op = _op};
 }
 
-/* For TK_OFFSET targets the PC-relative offset is in .imm, except for
+static void GenRegs3(MirInstVec* _v, A64Op _op, MirInst _base)
+{
+  for (u32 i = 0; i < NC_ARRAY_LEN(REGS_A); i++)
+  {
+    MirInst m = _base;
+    m.op = _op;
+    m.rd = REGS_A[i];
+    m.rn = REGS_A[(i + 2) % NC_ARRAY_LEN(REGS_A)];
+    m.rm = REGS_A[(i + 4) % NC_ARRAY_LEN(REGS_A)];
+    m.ra = REGS_A[(i + 5) % NC_ARRAY_LEN(REGS_A)];
+    Add(_v, m);
+  }
+}
+
+static void Gen(MirInstVec* _v, A64Op _op)
+{
+  const A64InsnInfo* ii = &A64_INSN_INFO[_op];
+  bool x64 = (ii->bits >> 31) != 0;
+  u32 width = x64 ? 64 : 32;
+  MirInst m = Mk(_op);
+  switch (ii->form)
+  {
+  case A64FormPseudo:
+    break;
+  case A64FormAddsubImm:
+  case A64FormCmpImm:
+  {
+    static const i64 IMMS[] = {0, 1, 4095, 4096, 0x123000, 0xFFF000};
+    for (u32 i = 0; i < NC_ARRAY_LEN(IMMS); i++)
+    {
+      m.rd = REGS_A[i % 7];
+      m.rn = REGS_A[(i + 3) % 7];
+      m.imm = IMMS[i];
+      Add(_v, m);
+    }
+    break;
+  }
+  case A64FormMovSp:
+    m.rd = 31;
+    m.rn = 0;
+    Add(_v, m);
+    m.rd = 29;
+    m.rn = 31;
+    Add(_v, m);
+    m.rd = 31;
+    m.rn = 29;
+    Add(_v, m);
+    break;
+  case A64FormLogicImm:
+  case A64FormTstImm:
+  {
+    static const u64 VALS[] = {1,
+                               0xFF,
+                               0xFFFF0000FFFF0000ull,
+                               0x5555555555555555ull,
+                               0x7FFFFFFFFFFFFFFEull,
+                               0x00000000F0F0F0F0ull,
+                               0x7FFFFFFF,
+                               0x8000000000000000ull,
+                               0x3C,
+                               0xFFFFFFFFFFFFFF00ull};
+    for (u32 i = 0; i < NC_ARRAY_LEN(VALS); i++)
+    {
+      u32 n, r, s;
+      if (!A64EncodeLogicalImm(VALS[i], width, &n, &r, &s))
+        continue;
+      m.rd = REGS_A[i % 7];
+      if (ii->kd == A64KindX && m.rd == 31)
+        m.rd = 3; /* ands xzr is tst, printed differently */
+      m.rn = REGS_A[(i + 1) % 6];
+      m.imm = (i64)VALS[i];
+      Add(_v, m);
+    }
+    break;
+  }
+  case A64FormMovw:
+  {
+    static const i64 IMMS[] = {0, 1, 0xFFFF, 0x1234};
+    for (u32 s = 0; s < width; s += 16)
+      for (u32 i = 0; i < NC_ARRAY_LEN(IMMS); i++)
+      {
+        m.rd = REGS_A[(i + s / 16) % 7];
+        m.imm = IMMS[i];
+        m.amount = (u8)s;
+        Add(_v, m);
+      }
+    break;
+  }
+  case A64FormAdr:
+  {
+    static const i64 ADR[] = {0, 4, -4, 1048572, -1048576, 12345};
+    static const i64 ADRP[] = {0, 4096, -4096, 0x7FFFF000, -0x80000000LL};
+    const i64* t = _op == A64OpADR ? ADR : ADRP;
+    u32 n = _op == A64OpADR ? NC_ARRAY_LEN(ADR) : NC_ARRAY_LEN(ADRP);
+    for (u32 i = 0; i < n; i++)
+    {
+      m.rd = REGS_A[i % 7];
+      m.tkind = A64TargetKindOffset;
+      m.imm = t[i];
+      Add(_v, m);
+    }
+    break;
+  }
+  case A64FormBitfield:
+  {
+    u32 hi = width - 1;
+    u32 pairs[][2] = {{0, 0}, {3, 7}, {hi, hi - 1}, {1, hi}};
+    for (u32 i = 0; i < NC_ARRAY_LEN(pairs); i++)
+    {
+      m.rd = REGS_A[i];
+      m.rn = REGS_A[i + 2];
+      m.imm = pairs[i][0];
+      m.amount = (u8)pairs[i][1];
+      Add(_v, m);
+    }
+    break;
+  }
+  case A64FormLslImm:
+  case A64FormLsrImm:
+  {
+    u32 amts[] = {1, 5, width - 1};
+    for (u32 i = 0; i < 3; i++)
+    {
+      m.rd = REGS_A[i];
+      m.rn = REGS_A[i + 3];
+      m.amount = (u8)amts[i];
+      Add(_v, m);
+    }
+    break;
+  }
+  case A64FormExtend:
+  case A64FormDp1:
+  case A64FormFp1:
+  case A64FormDp3:
+  case A64FormDp3Noa:
+  case A64FormDp2:
+  case A64FormFp2:
+  case A64FormFcmp:
+    GenRegs3(_v, _op, m);
+    break;
+  case A64FormLogicReg:
+  case A64FormAddsubReg:
+  case A64FormCmpReg:
+  case A64FormMovReg:
+  case A64FormNeg:
+  {
+    bool arith =
+      ii->form == A64FormAddsubReg || ii->form == A64FormNeg || (ii->form == A64FormCmpReg && _op != A64OpTSTXrs && _op != A64OpTSTWrs);
+    bool isMov = _op == A64OpMOVXr || _op == A64OpMOVWr;
+    for (u32 sh = 0; sh < 4; sh++)
+    {
+      if (arith && sh == A64ShiftRor)
+        continue;
+      u32 amts[] = {0, 3, width - 1};
+      for (u32 a = 0; a < 3; a++)
+      {
+        if (isMov && (amts[a] || sh != A64ShiftLsl))
+          continue;
+        m.rd = REGS_A[(sh + a) % 7];
+        m.rn = REGS_A[(sh + a + 2) % 7];
+        m.rm = REGS_A[(sh + a + 4) % 7];
+        if (ii->form == A64FormLogicReg && _op == A64OpANDSXrs && m.rd == 31)
+          m.rd = 2;
+        if (ii->form == A64FormLogicReg && _op == A64OpANDSWrs && m.rd == 31)
+          m.rd = 2;
+        if ((_op == A64OpSUBSXrs || _op == A64OpSUBSWrs || _op == A64OpADDSXrs || _op == A64OpADDSWrs) && m.rd == 31)
+          m.rd = 2;
+        if ((_op == A64OpSUBXrs || _op == A64OpSUBWrs) && m.rn == 31)
+          m.rn = 4; /* neg alias */
+        if ((_op == A64OpORRXrs || _op == A64OpORRWrs) && m.rn == 31)
+          m.rn = 4; /* mov alias */
+        if ((_op == A64OpORNXrs) && m.rn == 31)
+          m.rn = 4; /* mvn alias */
+        m.shift = (u8)sh;
+        m.amount = (u8)amts[a];
+        Add(_v, m);
+      }
+    }
+    break;
+  }
+  case A64FormAddsubExt:
+  {
+    static const A64Extend EXS[] = {A64ExtendUxtw, A64ExtendSxtw, A64ExtendUxtx, A64ExtendSxtx, A64ExtendUxtb, A64ExtendSxth};
+    static const u8 RDS[] = {31, 0, 31, 5, 7, 17};
+    static const u8 RNS[] = {31, 31, 1, 6, 31, 2};
+    for (u32 i = 0; i < NC_ARRAY_LEN(EXS); i++)
+      for (u8 amt = 0; amt <= 4; amt += 2)
+      {
+        m.rd = RDS[i];
+        m.rn = RNS[i];
+        m.rm = (u8)(i + 9);
+        m.shift = EXS[i];
+        m.amount = amt;
+        Add(_v, m);
+      }
+    break;
+  }
+  case A64FormCsel:
+  case A64FormCset:
+  {
+    static const A64Cond CS[] = {A64CondEq, A64CondNe, A64CondLt, A64CondGt, A64CondHs, A64CondLs, A64CondVs};
+    for (u32 i = 0; i < NC_ARRAY_LEN(CS); i++)
+    {
+      m.rd = REGS_A[i];
+      m.rn = REGS_A[(i + 1) % 7];
+      m.rm = REGS_A[(i + 2) % 7];
+      if (ii->form == A64FormCsel && (_op == A64OpCSINCX || _op == A64OpCSINVX || _op == A64OpCSNEGX || _op == A64OpCSINCW) && m.rn == m.rm)
+        m.rm = 4;
+      if (ii->form == A64FormCsel && m.rn == 31 && m.rm == 31)
+        m.rm = 4;
+      m.shift = CS[i];
+      Add(_v, m);
+    }
+    break;
+  }
+  case A64FormLdstUimm:
+  {
+    i64 s = (i64)1 << ii->accessSizeLog2;
+    i64 offs[] = {0, s, 4095 * s, 17 * s};
+    for (u32 i = 0; i < 4; i++)
+    {
+      m.rd = REGS_A[i + 1];
+      m.rn = i == 0 ? 31 : REGS_A[i + 2];
+      m.imm = offs[i];
+      Add(_v, m);
+    }
+    break;
+  }
+  case A64FormLdstPre:
+  case A64FormLdstPost:
+  case A64FormLdstUnscaled:
+  {
+    static const i64 OFFS[] = {-256, -16, 0, 8, 255};
+    for (u32 i = 0; i < NC_ARRAY_LEN(OFFS); i++)
+    {
+      m.rd = (u8)(i + 1);
+      m.rn = i == 1 ? 31 : (u8)(i + 10);
+      m.imm = OFFS[i];
+      Add(_v, m);
+    }
+    break;
+  }
+  case A64FormLdstReg:
+  {
+    static const A64Extend EXS[] = {A64ExtendUxtw, A64ExtendSxtw, A64ExtendUxtx, A64ExtendSxtx};
+    for (u32 i = 0; i < 4; i++)
+      for (u8 s = 0; s <= 1; s++)
+      {
+        m.rd = (u8)(i + 1);
+        m.rn = i == 2 ? 31 : (u8)(i + 10);
+        m.rm = (u8)(i + 20);
+        m.shift = EXS[i];
+        m.amount = s;
+        Add(_v, m);
+      }
+    break;
+  }
+  case A64FormLdstPair:
+  case A64FormLdstPairPre:
+  case A64FormLdstPairPost:
+  {
+    i64 s = (i64)1 << ii->accessSizeLog2;
+    i64 ks[] = {-64, -2, 0, 1, 63};
+    for (u32 i = 0; i < NC_ARRAY_LEN(ks); i++)
+    {
+      m.rd = (u8)(19 + i);
+      m.ra = (u8)(i == 2 ? 30 : 1 + i);
+      m.rn = i < 2 ? 31 : (u8)(9 + i);
+      m.imm = ks[i] * s;
+      Add(_v, m);
+    }
+    break;
+  }
+  case A64FormLdrLit:
+  case A64FormB:
+  case A64FormBcond:
+  case A64FormCb:
+  {
+    i64 lim = A64BranchRange(_op);
+    i64 offs[] = {0, 4, -4, lim - 4, -lim, 4096};
+    for (u32 i = 0; i < NC_ARRAY_LEN(offs); i++)
+    {
+      m.tkind = A64TargetKindOffset;
+      m.imm = offs[i];
+      m.rd = REGS_A[i];
+      m.shift = (u8)(i * 3 % 14);
+      Add(_v, m);
+    }
+    break;
+  }
+  case A64FormTb:
+  {
+    static const i64 BITS[] = {0, 5, 31, 32, 63};
+    static const i64 OFFS[] = {0, 32764, -32768, 8, -4};
+    for (u32 i = 0; i < 5; i++)
+    {
+      m.rd = REGS_A[i];
+      m.imm = BITS[i];
+      m.tkind = A64TargetKindOffset;
+      m.target = 0;
+      MirInst t = m;
+      t.imm = BITS[i];
+      /* pcrel travels separately; stash it in .target for the driver below */
+      t.target = (u32)(OFFS[i] & 0xFFFFFFFF);
+      Add(_v, t);
+    }
+    break;
+  }
+  case A64FormBr:
+  case A64FormRet:
+    for (u32 i = 0; i < 6; i++)
+    {
+      m.rn = REGS_A[i];
+      Add(_v, m);
+    }
+    break;
+  case A64FormSys:
+    Add(_v, m);
+    break;
+  case A64FormBrk:
+    m.imm = 0;
+    Add(_v, m);
+    m.imm = 0xF000;
+    Add(_v, m);
+    m.imm = 0xFFFF;
+    Add(_v, m);
+    break;
+  case A64FormFmovImm:
+  {
+    static const u8 IMMS[] = {0x70, 0x00, 0x80, 0x1F, 0xFF, 0x60};
+    for (u32 i = 0; i < NC_ARRAY_LEN(IMMS); i++)
+    {
+      m.rd = (u8)i;
+      m.imm = IMMS[i];
+      Add(_v, m);
+    }
+    break;
+  }
+  }
+}
+
+/* For A64TargetKindOffset targets the PC-relative offset is in .imm, except for
  * tbz/tbnz where .imm holds the bit number and .target the offset. */
-static i64 pcrel_of(const MInst *m) {
-    if (m->tkind != TK_OFFSET) return 0;
-    if (a64_insn_info[m->op].form == F_TB) return (i64)(i32)m->target;
-    return m->imm;
+static i64 PcrelOf(const MirInst* _m)
+{
+  if (_m->tkind != A64TargetKindOffset)
+    return 0;
+  if (A64_INSN_INFO[_m->op].form == A64FormTb)
+    return (i64)(i32)_m->target;
+  return _m->imm;
 }
 
-void test_encode_differential(void) {
-    if (!test_have_tool("llvm-mc")) {
-        fprintf(stderr, "encode: SKIPPED (llvm-mc not found)\n");
-        return;
-    }
-    MInstVec cases = {};
-    u32 per_op[A64_NUM_REAL] = {};
-    for (u32 op = 0; op < A64_NUM_REAL; op++) {
-        u32 before = cases.len;
-        gen(&cases, (A64Op)op);
-        per_op[op] = cases.len - before;
-    }
-    for (u32 op = 0; op < A64_NUM_REAL; op++)
-        CHECKF(per_op[op] > 0, "no encoding test cases for %s", a64_op_names[op]);
+void TestEncodeDifferential(void)
+{
+  if (!TestHaveTool("llvm-mc"))
+  {
+    fprintf(stderr, "encode: SKIPPED (llvm-mc not found)\n");
+    return;
+  }
+  MirInstVec cases = {};
+  u32 perOp[A64OpRealCount] = {};
+  for (u32 op = 0; op < A64OpRealCount; op++)
+  {
+    u32 before = cases.len;
+    Gen(&cases, (A64Op)op);
+    perOp[op] = cases.len - before;
+  }
+  for (u32 op = 0; op < A64OpRealCount; op++)
+    CHECKF(perOp[op] > 0, "no encoding test cases for %s", A64_OP_NAMES[op]);
 
-    const char *dir = test_tmpdir();
-    char asm_path[512], out_path[512], cmd[1400];
-    snprintf(asm_path, sizeof asm_path, "%s/ncc-test-encode.s", dir);
-    snprintf(out_path, sizeof out_path, "%s/ncc-test-encode.out", dir);
+  const char* dir = TestTmpdir();
+  char asmPath[512], outPath[512], cmd[1400];
+  snprintf(asmPath, sizeof asmPath, "%s/ncc-test-encode.s", dir);
+  snprintf(outPath, sizeof outPath, "%s/ncc-test-encode.out", dir);
 
-    FILE *f = fopen(asm_path, "w");
-    CHECK(f != nullptr);
-    if (!f) return;
-    u32 *words = nc_xrealloc(nullptr, sizeof(u32) * cases.len);
-    char text[256];
-    for (u32 i = 0; i < cases.len; i++) {
-        u16 rt;
-        i64 pc = pcrel_of(&cases.data[i]);
-        words[i] = a64_encode(&cases.data[i], pc, &rt);
-        a64_format(text, sizeof text, &cases.data[i], pc, nullptr, nullptr);
-        fprintf(f, "\t%s\n", text);
+  FILE* f = fopen(asmPath, "w");
+  CHECK(f != nullptr);
+  if (!f)
+    return;
+  u32* words = NcXrealloc(nullptr, sizeof(u32) * cases.len);
+  char text[256];
+  for (u32 i = 0; i < cases.len; i++)
+  {
+    u16 rt;
+    i64 pc = PcrelOf(&cases.data[i]);
+    words[i] = A64Encode(&cases.data[i], pc, &rt);
+    A64Format(text, sizeof text, &cases.data[i], pc, nullptr, nullptr);
+    fprintf(f, "\t%s\n", text);
+  }
+  fclose(f);
+
+  snprintf(cmd, sizeof cmd, "llvm-mc -triple=aarch64-pc-windows-msvc -mattr=+v8.3a -show-encoding %s > %s 2>&1", asmPath, outPath);
+  int rc = system(cmd);
+  CHECKF(rc == 0, "llvm-mc failed, see %s", outPath);
+
+  FILE* in = fopen(outPath, "r");
+  CHECK(in != nullptr);
+  if (!in)
+    return;
+  char line[512];
+  u32 idx = 0, mismatches = 0;
+  while (fgets(line, sizeof line, in))
+  {
+    char* e = strstr(line, "encoding: [");
+    if (!e)
+      continue;
+    unsigned b[4];
+    if (sscanf(e, "encoding: [0x%x,0x%x,0x%x,0x%x]", &b[0], &b[1], &b[2], &b[3]) != 4)
+    {
+      CHECKF(false, "unparsable llvm-mc line: %s", line);
+      continue;
     }
-    fclose(f);
-
-    snprintf(cmd, sizeof cmd,
-             "llvm-mc -triple=aarch64-pc-windows-msvc -mattr=+v8.3a -show-encoding %s > %s 2>&1",
-             asm_path, out_path);
-    int rc = system(cmd);
-    CHECKF(rc == 0, "llvm-mc failed, see %s", out_path);
-
-    FILE *in = fopen(out_path, "r");
-    CHECK(in != nullptr);
-    if (!in) return;
-    char line[512];
-    u32 idx = 0, mismatches = 0;
-    while (fgets(line, sizeof line, in)) {
-        char *e = strstr(line, "encoding: [");
-        if (!e) continue;
-        unsigned b[4];
-        if (sscanf(e, "encoding: [0x%x,0x%x,0x%x,0x%x]", &b[0], &b[1], &b[2], &b[3]) != 4) {
-            CHECKF(false, "unparsable llvm-mc line: %s", line);
-            continue;
-        }
-        u32 ref = b[0] | b[1] << 8 | b[2] << 16 | b[3] << 24;
-        if (idx < cases.len && ref != words[idx]) {
-            a64_format(text, sizeof text, &cases.data[idx], pcrel_of(&cases.data[idx]), nullptr,
-                       nullptr);
-            if (mismatches++ < 40)
-                fprintf(stderr, "encode mismatch: %-40s ncc=%08x llvm-mc=%08x (%s)\n", text,
-                        words[idx], ref, a64_op_names[cases.data[idx].op]);
-        }
-        idx++;
+    u32 ref = b[0] | b[1] << 8 | b[2] << 16 | b[3] << 24;
+    if (idx < cases.len && ref != words[idx])
+    {
+      A64Format(text, sizeof text, &cases.data[idx], PcrelOf(&cases.data[idx]), nullptr, nullptr);
+      if (mismatches++ < 40)
+        fprintf(stderr, "encode mismatch: %-40s ncc=%08x llvm-mc=%08x (%s)\n", text, words[idx], ref, A64_OP_NAMES[cases.data[idx].op]);
     }
-    fclose(in);
-    CHECKF(idx == cases.len, "llvm-mc produced %u encodings for %u instructions", idx, cases.len);
-    CHECKF(mismatches == 0, "%u encoding mismatches", mismatches);
-    test_checks += (int)cases.len;
-    nc_xfree(words);
-    vec_free(&cases);
+    idx++;
+  }
+  fclose(in);
+  CHECKF(idx == cases.len, "llvm-mc produced %u encodings for %u instructions", idx, cases.len);
+  CHECKF(mismatches == 0, "%u encoding mismatches", mismatches);
+  g_testChecks += (int)cases.len;
+  NcXfree(words);
+  VEC_FREE(&cases);
 }
 
-static int cmp_u64(const void *a, const void *b) {
-    u64 x = *(const u64 *)a, y = *(const u64 *)b;
-    return x < y ? -1 : x > y;
+static int CmpU64(const void* _a, const void* _b)
+{
+  u64 x = *(const u64*)_a, y = *(const u64*)_b;
+  return x < y ? -1 : x > y;
 }
 
-void test_logical_imm(void) {
-    /* Enumerate every architecturally valid (N, immr, imms) triple, decode it,
+void TestLogicalImm(void)
+{
+  /* Enumerate every architecturally valid (N, immr, imms) triple, decode it,
      * and require that the encoder accepts the value and reproduces it. The
      * number of distinct values is a known constant: 5334 for 64-bit and
      * 1302 for 32-bit registers. */
-    for (u32 width = 32; width <= 64; width += 32) {
-        u64 *vals = nc_xrealloc(nullptr, sizeof(u64) * 8192);
-        u32 nv = 0;
-        for (u32 n = 0; n <= (width == 64 ? 1u : 0u); n++)
-            for (u32 imms = 0; imms < 64; imms++) {
-                u32 combined = (n << 6) | (~imms & 0x3F);
-                if (combined == 0) continue;
-                u32 size = 1u << (31 - (u32)__builtin_clz(combined));
-                if (size > width || (imms & (size - 1)) == size - 1) continue;
-                for (u32 immr = 0; immr < size; immr++) {
-                    u64 v = a64_decode_logical_imm(n, immr, imms, width);
-                    vals[nv++] = v;
-                    u32 n2, r2, s2;
-                    bool ok = a64_encode_logical_imm(v, width, &n2, &r2, &s2);
-                    CHECKF(ok, "w%u value %llx not encodable", width, (unsigned long long)v);
-                    if (ok)
-                        CHECKF(a64_decode_logical_imm(n2, r2, s2, width) == v,
-                               "w%u value %llx round-trip", width, (unsigned long long)v);
-                }
-            }
-        qsort(vals, nv, sizeof *vals, cmp_u64);
-        u32 distinct = 0;
-        for (u32 i = 0; i < nv; i++) distinct += (i == 0 || vals[i] != vals[i - 1]);
-        CHECKF(distinct == (width == 64 ? 5334u : 1302u), "w%u: %u distinct values", width,
-               distinct);
-        nc_xfree(vals);
-    }
-    u32 n, r, s;
-    CHECK(!a64_encode_logical_imm(0, 64, &n, &r, &s));
-    CHECK(!a64_encode_logical_imm(~(u64)0, 64, &n, &r, &s));
-    CHECK(!a64_encode_logical_imm(0x1234, 64, &n, &r, &s));
-    CHECK(!a64_encode_logical_imm(0x100000000ull, 32, &n, &r, &s));
-    CHECK(a64_encode_logical_imm(0xFF, 32, &n, &r, &s) && n == 0 && r == 0 && s == 7);
+  for (u32 width = 32; width <= 64; width += 32)
+  {
+    u64* vals = NcXrealloc(nullptr, sizeof(u64) * 8192);
+    u32 nv = 0;
+    for (u32 n = 0; n <= (width == 64 ? 1u : 0u); n++)
+      for (u32 imms = 0; imms < 64; imms++)
+      {
+        u32 combined = (n << 6) | (~imms & 0x3F);
+        if (combined == 0)
+          continue;
+        u32 size = 1u << (31 - NC_CLZ32_NONZERO(combined));
+        if (size > width || (imms & (size - 1)) == size - 1)
+          continue;
+        for (u32 immr = 0; immr < size; immr++)
+        {
+          u64 v = A64DecodeLogicalImm(n, immr, imms, width);
+          vals[nv++] = v;
+          u32 n2, r2, s2;
+          bool ok = A64EncodeLogicalImm(v, width, &n2, &r2, &s2);
+          CHECKF(ok, "w%u value %llx not encodable", width, (unsigned long long)v);
+          if (ok)
+            CHECKF(A64DecodeLogicalImm(n2, r2, s2, width) == v, "w%u value %llx round-trip", width, (unsigned long long)v);
+        }
+      }
+    qsort(vals, nv, sizeof *vals, CmpU64);
+    u32 distinct = 0;
+    for (u32 i = 0; i < nv; i++)
+      distinct += (i == 0 || vals[i] != vals[i - 1]);
+    CHECKF(distinct == (width == 64 ? 5334u : 1302u), "w%u: %u distinct values", width, distinct);
+    NcXfree(vals);
+  }
+  u32 n, r, s;
+  CHECK(!A64EncodeLogicalImm(0, 64, &n, &r, &s));
+  CHECK(!A64EncodeLogicalImm(~(u64)0, 64, &n, &r, &s));
+  CHECK(!A64EncodeLogicalImm(0x1234, 64, &n, &r, &s));
+  CHECK(!A64EncodeLogicalImm(0x100000000ull, 32, &n, &r, &s));
+  CHECK(A64EncodeLogicalImm(0xFF, 32, &n, &r, &s) && n == 0 && r == 0 && s == 7);
 }
 
 /* ---- symbol-operand forms ------------------------------------------------
@@ -385,93 +514,102 @@ void test_logical_imm(void) {
  * the first Windows CI run found that `add ..., :secrel_hi12:sym` lacked the
  * lsl #12 bit: link.exe rejected it (LNK2040), lld-link did not. */
 
-static const char *const reloc_names[] = {
-    [IMAGE_REL_ARM64_PAGEBASE_REL21] = "IMAGE_REL_ARM64_PAGEBASE_REL21",
-    [IMAGE_REL_ARM64_REL21] = "IMAGE_REL_ARM64_REL21",
-    [IMAGE_REL_ARM64_PAGEOFFSET_12A] = "IMAGE_REL_ARM64_PAGEOFFSET_12A",
-    [IMAGE_REL_ARM64_PAGEOFFSET_12L] = "IMAGE_REL_ARM64_PAGEOFFSET_12L",
-    [IMAGE_REL_ARM64_SECREL_LOW12A] = "IMAGE_REL_ARM64_SECREL_LOW12A",
-    [IMAGE_REL_ARM64_SECREL_HIGH12A] = "IMAGE_REL_ARM64_SECREL_HIGH12A",
-    [IMAGE_REL_ARM64_SECREL_LOW12L] = "IMAGE_REL_ARM64_SECREL_LOW12L",
-    [IMAGE_REL_ARM64_BRANCH26] = "IMAGE_REL_ARM64_BRANCH26",
-    [IMAGE_REL_ARM64_BRANCH19] = "IMAGE_REL_ARM64_BRANCH19",
-    [IMAGE_REL_ARM64_BRANCH14] = "IMAGE_REL_ARM64_BRANCH14",
+static const char* const RELOC_NAMES[] = {
+  [IMAGE_REL_ARM64_PAGEBASE_REL21] = "IMAGE_REL_ARM64_PAGEBASE_REL21",
+  [IMAGE_REL_ARM64_REL21] = "IMAGE_REL_ARM64_REL21",
+  [IMAGE_REL_ARM64_PAGEOFFSET_12A] = "IMAGE_REL_ARM64_PAGEOFFSET_12A",
+  [IMAGE_REL_ARM64_PAGEOFFSET_12L] = "IMAGE_REL_ARM64_PAGEOFFSET_12L",
+  [IMAGE_REL_ARM64_SECREL_LOW12A] = "IMAGE_REL_ARM64_SECREL_LOW12A",
+  [IMAGE_REL_ARM64_SECREL_HIGH12A] = "IMAGE_REL_ARM64_SECREL_HIGH12A",
+  [IMAGE_REL_ARM64_SECREL_LOW12L] = "IMAGE_REL_ARM64_SECREL_LOW12L",
+  [IMAGE_REL_ARM64_BRANCH26] = "IMAGE_REL_ARM64_BRANCH26",
+  [IMAGE_REL_ARM64_BRANCH19] = "IMAGE_REL_ARM64_BRANCH19",
+  [IMAGE_REL_ARM64_BRANCH14] = "IMAGE_REL_ARM64_BRANCH14",
 };
 
-static const char *sym_cb(void *ctx, u32 sym) { (void)ctx; (void)sym; return "ext_sym"; }
+static const char* SymCb(void* _ctx, u32 _sym)
+{
+  (void)_ctx;
+  (void)_sym;
+  return "ext_sym";
+}
 
-void test_encode_symbolic(void) {
-    if (!test_have_tool("llvm-mc") || !test_have_tool("llvm-objdump")) {
-        fprintf(stderr, "encode_symbolic: SKIPPED (llvm-mc or llvm-objdump not found)\n");
-        return;
-    }
-    const MInst cases[] = {
-        {.op = A64_ADRP, .rd = 8, .tkind = TK_SYM},
-        {.op = A64_ADR, .rd = 3, .tkind = TK_SYM},
-        {.op = A64_ADDXri, .rd = 1, .rn = 1, .tkind = TK_SYM},
-        {.op = A64_ADDXri, .rd = 8, .rn = 8, .tkind = TK_SYM, .smod = SM_SECREL_HI12},
-        {.op = A64_ADDXri, .rd = 8, .rn = 8, .tkind = TK_SYM, .smod = SM_SECREL_LO12},
-        {.op = A64_LDRXui, .rd = 16, .rn = 16, .tkind = TK_SYM},
-        {.op = A64_LDRWui, .rd = 9, .rn = 9, .tkind = TK_SYM},
-        {.op = A64_STRXui, .rd = 2, .rn = 5, .tkind = TK_SYM},
-        {.op = A64_LDRBBui, .rd = 2, .rn = 5, .tkind = TK_SYM},
-        {.op = A64_LDRWui, .rd = 9, .rn = 8, .tkind = TK_SYM, .smod = SM_SECREL_LO12},
-        {.op = A64_STRWui, .rd = 0, .rn = 8, .tkind = TK_SYM, .smod = SM_SECREL_LO12},
-        {.op = A64_BL, .tkind = TK_SYM},
-        {.op = A64_B, .tkind = TK_SYM},
-        {.op = A64_Bcc, .shift = CC_NE, .tkind = TK_SYM},
-        {.op = A64_CBZX, .rd = 4, .tkind = TK_SYM},
-        {.op = A64_TBNZ, .rd = 4, .imm = 7, .tkind = TK_SYM},
-    };
-    u32 n = NC_ARRAY_LEN(cases);
-    const char *dir = test_tmpdir();
-    char s_path[512], o_path[512], d_path[512], cmd[4096];
-    snprintf(s_path, sizeof s_path, "%s/ncc-test-sym.s", dir);
-    snprintf(o_path, sizeof o_path, "%s/ncc-test-sym.obj", dir);
-    snprintf(d_path, sizeof d_path, "%s/ncc-test-sym.dis", dir);
-    FILE *f = fopen(s_path, "w");
-    CHECK(f != nullptr);
-    if (!f) return;
-    u32 words[32];
-    u16 rtypes[32];
-    char text[256];
-    for (u32 i = 0; i < n; i++) {
-        words[i] = a64_encode(&cases[i], 0, &rtypes[i]);
-        a64_format(text, sizeof text, &cases[i], 0, sym_cb, nullptr);
-        fprintf(f, "\t%s\n", text);
-    }
-    fclose(f);
-    snprintf(cmd, sizeof cmd,
-             "llvm-mc -triple=aarch64-pc-windows-msvc -filetype=obj %s -o %s && "
-             "llvm-objdump -dr %s > %s",
-             s_path, o_path, o_path, d_path);
-    CHECKF(system(cmd) == 0, "llvm-mc/llvm-objdump failed on %s", s_path);
+void TestEncodeSymbolic(void)
+{
+  if (!TestHaveTool("llvm-mc") || !TestHaveTool("llvm-objdump"))
+  {
+    fprintf(stderr, "encode_symbolic: SKIPPED (llvm-mc or llvm-objdump not found)\n");
+    return;
+  }
+  const MirInst cases[] = {
+    {.op = A64OpADRP, .rd = 8, .tkind = A64TargetKindSym},
+    {.op = A64OpADR, .rd = 3, .tkind = A64TargetKindSym},
+    {.op = A64OpADDXri, .rd = 1, .rn = 1, .tkind = A64TargetKindSym},
+    {.op = A64OpADDXri, .rd = 8, .rn = 8, .tkind = A64TargetKindSym, .smod = A64SymModSecrelHi12},
+    {.op = A64OpADDXri, .rd = 8, .rn = 8, .tkind = A64TargetKindSym, .smod = A64SymModSecrelLo12},
+    {.op = A64OpLDRXui, .rd = 16, .rn = 16, .tkind = A64TargetKindSym},
+    {.op = A64OpLDRWui, .rd = 9, .rn = 9, .tkind = A64TargetKindSym},
+    {.op = A64OpSTRXui, .rd = 2, .rn = 5, .tkind = A64TargetKindSym},
+    {.op = A64OpLDRBBui, .rd = 2, .rn = 5, .tkind = A64TargetKindSym},
+    {.op = A64OpLDRWui, .rd = 9, .rn = 8, .tkind = A64TargetKindSym, .smod = A64SymModSecrelLo12},
+    {.op = A64OpSTRWui, .rd = 0, .rn = 8, .tkind = A64TargetKindSym, .smod = A64SymModSecrelLo12},
+    {.op = A64OpBL, .tkind = A64TargetKindSym},
+    {.op = A64OpB, .tkind = A64TargetKindSym},
+    {.op = A64OpBcc, .shift = A64CondNe, .tkind = A64TargetKindSym},
+    {.op = A64OpCBZX, .rd = 4, .tkind = A64TargetKindSym},
+    {.op = A64OpTBNZ, .rd = 4, .imm = 7, .tkind = A64TargetKindSym},
+  };
+  u32 n = NC_ARRAY_LEN(cases);
+  const char* dir = TestTmpdir();
+  char sPath[512], oPath[512], dPath[512], cmd[4096];
+  snprintf(sPath, sizeof sPath, "%s/ncc-test-sym.s", dir);
+  snprintf(oPath, sizeof oPath, "%s/ncc-test-sym.obj", dir);
+  snprintf(dPath, sizeof dPath, "%s/ncc-test-sym.dis", dir);
+  FILE* f = fopen(sPath, "w");
+  CHECK(f != nullptr);
+  if (!f)
+    return;
+  u32 words[32];
+  u16 rtypes[32];
+  char text[256];
+  for (u32 i = 0; i < n; i++)
+  {
+    words[i] = A64Encode(&cases[i], 0, &rtypes[i]);
+    A64Format(text, sizeof text, &cases[i], 0, SymCb, nullptr);
+    fprintf(f, "\t%s\n", text);
+  }
+  fclose(f);
+  snprintf(cmd, sizeof cmd,
+           "llvm-mc -triple=aarch64-pc-windows-msvc -filetype=obj %s -o %s && "
+           "llvm-objdump -dr %s > %s",
+           sPath, oPath, oPath, dPath);
+  CHECKF(system(cmd) == 0, "llvm-mc/llvm-objdump failed on %s", sPath);
 
-    FILE *in = fopen(d_path, "r");
-    CHECK(in != nullptr);
-    if (!in) return;
-    char line[512];
-    u32 wi = 0, ri = 0;
-    while (fgets(line, sizeof line, in)) {
-        unsigned off, w;
-        char rel[96];
-        if (sscanf(line, " %x: %8x", &off, &w) == 2 && strstr(line, "\t") && off / 4 == wi &&
-            wi < n) {
-            CHECKF(w == words[wi], "symbolic %s: ncc=%08x llvm-mc=%08x",
-                   a64_op_names[cases[wi].op], words[wi], w);
-            wi++;
-        } else if (sscanf(line, " %x: %95s", &off, rel) == 2 && strncmp(rel, "IMAGE_REL_", 10) == 0) {
-            u32 k = off / 4;
-            CHECKF(k < n && rtypes[k] < NC_ARRAY_LEN(reloc_names) && reloc_names[rtypes[k]] &&
-                       strcmp(reloc_names[rtypes[k]], rel) == 0,
-                   "symbolic %s: relocation ncc=%s llvm-mc=%s", k < n ? a64_op_names[cases[k].op] : "?",
-                   k < n && rtypes[k] < NC_ARRAY_LEN(reloc_names) && reloc_names[rtypes[k]]
-                       ? reloc_names[rtypes[k]] : "?",
-                   rel);
-            ri++;
-        }
+  FILE* in = fopen(dPath, "r");
+  CHECK(in != nullptr);
+  if (!in)
+    return;
+  char line[512];
+  u32 wi = 0, ri = 0;
+  while (fgets(line, sizeof line, in))
+  {
+    unsigned off, w;
+    char rel[96];
+    if (sscanf(line, " %x: %8x", &off, &w) == 2 && strstr(line, "\t") && off / 4 == wi && wi < n)
+    {
+      CHECKF(w == words[wi], "symbolic %s: ncc=%08x llvm-mc=%08x", A64_OP_NAMES[cases[wi].op], words[wi], w);
+      wi++;
     }
-    fclose(in);
-    CHECKF(wi == n, "llvm-objdump showed %u of %u instructions", wi, n);
-    CHECKF(ri == n, "llvm-objdump showed %u of %u relocations", ri, n);
+    else if (sscanf(line, " %x: %95s", &off, rel) == 2 && strncmp(rel, "IMAGE_REL_", 10) == 0)
+    {
+      u32 k = off / 4;
+      CHECKF(k < n && rtypes[k] < NC_ARRAY_LEN(RELOC_NAMES) && RELOC_NAMES[rtypes[k]] && strcmp(RELOC_NAMES[rtypes[k]], rel) == 0,
+             "symbolic %s: relocation ncc=%s llvm-mc=%s", k < n ? A64_OP_NAMES[cases[k].op] : "?",
+             k < n && rtypes[k] < NC_ARRAY_LEN(RELOC_NAMES) && RELOC_NAMES[rtypes[k]] ? RELOC_NAMES[rtypes[k]] : "?", rel);
+      ri++;
+    }
+  }
+  fclose(in);
+  CHECKF(wi == n, "llvm-objdump showed %u of %u instructions", wi, n);
+  CHECKF(ri == n, "llvm-objdump showed %u of %u relocations", ri, n);
 }

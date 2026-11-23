@@ -12,13 +12,12 @@
 # overlap: clang-tidy has no check that reports a wrong brace position or an over-long line, and
 # clang-format cannot see that a parameter is missing its `_`.
 #
-# ── Status: NOT YET GATED ──────────────────────────────────────────────────────────────────
+# ── Status: GATED ─────────────────────────────────────────────────────────────────────────
 #
-# The phase-0 sources predate this file and do not follow it (AGENTS.md §8): their functions are
-# snake_case, their enumerators are prefixed UPPER_CASE and their parameters carry no `_`. They are
-# converted in one dedicated change, and that change wires `make tidy` into the Linux CI job in
-# .github/workflows/ci.yml. From then on a whole-tree pass comes back clean and a finding is a defect
-# rather than archaeology -- fix the code, do not narrow the filter.
+# `make tidy` runs on the Clang leg of the Linux CI job in .github/workflows/ci.yml, over every .c
+# under src/ and tests/, for the host and for Windows ARM64. The phase-0 sources were converted to
+# this file in one change (AGENTS.md §8), and a whole-tree pass comes back clean, so a finding is a
+# defect rather than archaeology -- fix the code, do not narrow the filter.
 #
 # Run it yourself, on the files you wrote, before you push. It takes the same switches as the
 # Makefile, and nothing else, because every include in this tree is relative (AGENTS.md §2):
@@ -31,12 +30,14 @@
 #   clang-tidy --quiet src/core/os.c -- -std=c2x --target=aarch64-w64-windows-gnu \
 #     -isystem /usr/share/mingw-w64/include
 #
-# THE VERSION MATTERS, and the gate PINS it when it is wired. "Clean" is always clean *under
+# THE VERSION MATTERS, and the gate PINS it: LLVM 18.1.3, the version ubuntu-24.04 installs (Q-28).
+# `make tidy` refuses to run under any other. "Clean" is always clean *under
 # something*, and that something has to have a number. In the sibling tree the runner image moved
 # LLVM releases underneath an unpinned clang-tidy and main went red with no change to the code:
 # the newer release reported two correct constructs and, in the same run, one real defect. The
 # lesson travels even though the incident does not: a version change must not be able to turn main
-# red on its own. These settings were verified against clang-tidy 22.1.8.
+# red on its own. These settings were first verified against clang-tidy 22.1.8; the gate holds the
+# tree clean under 18.1.3. Moving the pin is its own change, with the tree re-measured.
 
 # readability-identifier-length is deliberately NOT enabled. Its defaults reject the domain
 # vocabulary this codebase is built on -- rd, rn, rm, imm, sz, _a, _b -- and short names here are
@@ -50,6 +51,7 @@ Checks: >
   -bugprone-easily-swappable-parameters,
   -bugprone-narrowing-conversions,
   -clang-analyzer-optin.performance.Padding,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
   -performance-enum-size
 
 # `-clang-analyzer-optin.performance.Padding` is a judgement call, not a mechanical exclusion. It

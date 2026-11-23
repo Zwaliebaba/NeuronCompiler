@@ -24,416 +24,444 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static A64Module M;
-static Buf src;       /* pseudo-source text */
-static u32 src_line;  /* lines emitted so far */
+static A64Module g_module;
+static Buf g_src;     /* pseudo-source text */
+static u32 g_srcLine; /* lines emitted so far */
 
 /* Appends a pseudo-source line and stamps following instructions with it. */
-static void SRC(MFunc *f, const char *fmt, ...) {
-    char tmp[256];
-    va_list ap;
-    va_start(ap, fmt);
-    int n = vsnprintf(tmp, sizeof tmp, fmt, ap);
-    va_end(ap);
-    buf_bytes(&src, tmp, (u32)n);
-    buf_u8(&src, '\n');
-    src_line++;
-    if (f) mf_line(f, src_line);
+static void SRC(MirFunc* _f, const char* _fmt, ...)
+{
+  char tmp[256];
+  va_list ap;
+  va_start(ap, _fmt);
+  int n = vsnprintf(tmp, sizeof tmp, _fmt, ap);
+  va_end(ap);
+  BufBytes(&g_src, tmp, (u32)n);
+  BufU8(&g_src, '\n');
+  g_srcLine++;
+  if (_f)
+    MirFuncLine(_f, g_srcLine);
 }
 
 /* ---- tiny assembler vocabulary ------------------------------------------ */
 
-static void ins(MFunc *f, MInst mi) { mf_emit(f, mi); }
+static void Ins(MirFunc* _f, MirInst _mi)
+{
+  MirFuncEmit(_f, _mi);
+}
 
-static MInst rr(A64Op op, u32 d, u32 n, u32 m) {
-    return (MInst){.op = op, .rd = (u8)d, .rn = (u8)n, .rm = (u8)m};
+static MirInst Rr(A64Op _op, u32 _d, u32 _n, u32 _m)
+{
+  return (MirInst){.op = _op, .rd = (u8)_d, .rn = (u8)_n, .rm = (u8)_m};
 }
-static MInst ri(A64Op op, u32 d, u32 n, i64 imm) {
-    return (MInst){.op = op, .rd = (u8)d, .rn = (u8)n, .imm = imm};
+static MirInst Ri(A64Op _op, u32 _d, u32 _n, i64 _imm)
+{
+  return (MirInst){.op = _op, .rd = (u8)_d, .rn = (u8)_n, .imm = _imm};
 }
-static MInst bcond(A64Cond c, u32 label) {
-    return (MInst){.op = A64_Bcc, .shift = c, .tkind = TK_LABEL, .target = label};
+static MirInst Bcond(A64Cond _c, u32 _label)
+{
+  return (MirInst){.op = A64OpBcc, .shift = _c, .tkind = A64TargetKindLabel, .target = _label};
 }
-static void call(MFunc *f, const char *name) {
-    ins(f, (MInst){.op = A64_BL, .tkind = TK_SYM, .target = a64m_sym(&M, name)});
+static void Call(MirFunc* _f, const char* _name)
+{
+  Ins(_f, (MirInst){.op = A64OpBL, .tkind = A64TargetKindSym, .target = A64ModuleSym(&g_module, _name)});
 }
 /* Call through the import address table, as for a dllimport declaration. */
-static void call_import(MFunc *f, const char *name) {
-    char imp[128];
-    snprintf(imp, sizeof imp, "__imp_%s", name);
-    u32 s = a64m_sym(&M, imp);
-    ins(f, (MInst){.op = A64_ADRP, .rd = A64_IP0, .tkind = TK_SYM, .target = s});
-    ins(f, (MInst){.op = A64_LDRXui, .rd = A64_IP0, .rn = A64_IP0, .tkind = TK_SYM, .target = s});
-    ins(f, (MInst){.op = A64_BLR, .rn = A64_IP0});
+static void CallImport(MirFunc* _f, const char* _name)
+{
+  char imp[128];
+  snprintf(imp, sizeof imp, "__imp_%s", _name);
+  u32 s = A64ModuleSym(&g_module, imp);
+  Ins(_f, (MirInst){.op = A64OpADRP, .rd = A64_IP0, .tkind = A64TargetKindSym, .target = s});
+  Ins(_f, (MirInst){.op = A64OpLDRXui, .rd = A64_IP0, .rn = A64_IP0, .tkind = A64TargetKindSym, .target = s});
+  Ins(_f, (MirInst){.op = A64OpBLR, .rn = A64_IP0});
 }
-static void addr_of(MFunc *f, u32 rd, const char *name) {
-    u32 s = a64m_sym(&M, name);
-    ins(f, (MInst){.op = A64_ADRP, .rd = (u8)rd, .tkind = TK_SYM, .target = s});
-    ins(f, (MInst){.op = A64_ADDXri, .rd = (u8)rd, .rn = (u8)rd, .tkind = TK_SYM, .target = s});
+static void AddrOf(MirFunc* _f, u32 _rd, const char* _name)
+{
+  u32 s = A64ModuleSym(&g_module, _name);
+  Ins(_f, (MirInst){.op = A64OpADRP, .rd = (u8)_rd, .tkind = A64TargetKindSym, .target = s});
+  Ins(_f, (MirInst){.op = A64OpADDXri, .rd = (u8)_rd, .rn = (u8)_rd, .tkind = A64TargetKindSym, .target = s});
 }
-static void mov(MFunc *f, u32 d, u32 m) { ins(f, rr(A64_MOVXr, d, 0, m)); }
+static void Mov(MirFunc* _f, u32 _d, u32 _m)
+{
+  Ins(_f, Rr(A64OpMOVXr, _d, 0, _m));
+}
 
-static void emit_string(const char *name, const char *s) {
-    a64m_emit_data(&M, name, true, DATA_RO, s, (u32)strlen(s) + 1, 1, nullptr, 0);
+static void EmitString(const char* _name, const char* _s)
+{
+  A64ModuleEmitData(&g_module, _name, true, A64DataKindRo, _s, (u32)strlen(_s) + 1, 1, nullptr, 0);
 }
 
 /* ---- functions ---------------------------------------------------------- */
 
 /* sum_squares(n): frameless leaf. */
-static void build_sum_squares(void) {
-    MFunc f;
-    mf_init(&f, "sum_squares", true, (FrameDesc){.frameless = true});
-    SRC(&f, "static int sum_squares(int n) {   // frameless leaf: no unwind data");
-    ins(&f, (MInst){.op = A64_P_PROLOGUE});
-    u32 loop = mf_new_label(&f), done = mf_new_label(&f);
-    SRC(&f, "    int acc = 0;");
-    ins(&f, rr(A64_MOVWr, 1, 0, A64_ZR));
-    SRC(&f, "    for (; n != 0; n--) acc += n * n;");
-    ins(&f, (MInst){.op = A64_CBZW, .rd = 0, .tkind = TK_LABEL, .target = done});
-    mf_label(&f, loop);
-    ins(&f, (MInst){.op = A64_MADDW, .rd = 1, .rn = 0, .rm = 0, .ra = 1});
-    ins(&f, ri(A64_SUBSWri, 0, 0, 1));
-    ins(&f, bcond(CC_NE, loop));
-    mf_label(&f, done);
-    SRC(&f, "    return acc;");
-    ins(&f, rr(A64_MOVWr, 0, 0, 1));
-    ins(&f, (MInst){.op = A64_P_EPILOGUE});
-    SRC(&f, "}");
-    a64m_emit_function(&M, &f);
-    mf_free(&f);
+static void BuildSumSquares(void)
+{
+  MirFunc f;
+  MirFuncInit(&f, "sum_squares", true, (FrameDesc){.frameless = true});
+  SRC(&f, "static int sum_squares(int n) {   // frameless leaf: no unwind data");
+  Ins(&f, (MirInst){.op = A64OpPseudoPrologue});
+  u32 loop = MirFuncNewLabel(&f), done = MirFuncNewLabel(&f);
+  SRC(&f, "    int acc = 0;");
+  Ins(&f, Rr(A64OpMOVWr, 1, 0, A64_ZR));
+  SRC(&f, "    for (; n != 0; n--) acc += n * n;");
+  Ins(&f, (MirInst){.op = A64OpCBZW, .rd = 0, .tkind = A64TargetKindLabel, .target = done});
+  MirFuncLabel(&f, loop);
+  Ins(&f, (MirInst){.op = A64OpMADDW, .rd = 1, .rn = 0, .rm = 0, .ra = 1});
+  Ins(&f, Ri(A64OpSUBSWri, 0, 0, 1));
+  Ins(&f, Bcond(A64CondNe, loop));
+  MirFuncLabel(&f, done);
+  SRC(&f, "    return acc;");
+  Ins(&f, Rr(A64OpMOVWr, 0, 0, 1));
+  Ins(&f, (MirInst){.op = A64OpPseudoEpilogue});
+  SRC(&f, "}");
+  A64ModuleEmitFunction(&g_module, &f);
+  MirFuncFree(&f);
 }
 
 /* big_frame(): 8 KiB of locals, so the prologue calls __chkstk. */
-static void build_big_frame(void) {
-    MFunc f;
-    mf_init(&f, "big_frame", true, (FrameDesc){.locals = 8192});
-    SRC(&f, "static int big_frame(void) {       // 8 KiB frame: __chkstk probe");
-    ins(&f, (MInst){.op = A64_P_PROLOGUE});
-    SRC(&f, "    unsigned char buf[8192]; int sum = 0;");
-    ins(&f, (MInst){.op = A64_MOVXsp, .rd = 8, .rn = A64_SP});
-    ins(&f, (MInst){.op = A64_MOVZX, .rd = 10});
-    ins(&f, (MInst){.op = A64_MOVZW, .rd = 12});
-    u32 l1 = mf_new_label(&f), l2 = mf_new_label(&f);
-    SRC(&f, "    for (size_t i = 0; i < 8192; i++) buf[i] = (unsigned char)i;");
-    mf_label(&f, l1);
-    ins(&f, (MInst){.op = A64_STRBBro, .rd = 10, .rn = 8, .rm = 10, .shift = EX_UXTX});
-    ins(&f, ri(A64_ADDXri, 10, 10, 1));
-    ins(&f, (MInst){.op = A64_CMPXri, .rn = 10, .imm = 8192});
-    ins(&f, bcond(CC_LO, l1));
-    SRC(&f, "    for (size_t i = 0; i < 8192; i++) sum += buf[i];");
-    ins(&f, (MInst){.op = A64_MOVZX, .rd = 10});
-    mf_label(&f, l2);
-    ins(&f, (MInst){.op = A64_LDRBBro, .rd = 11, .rn = 8, .rm = 10, .shift = EX_UXTX});
-    ins(&f, rr(A64_ADDWrs, 12, 12, 11));
-    ins(&f, ri(A64_ADDXri, 10, 10, 1));
-    ins(&f, (MInst){.op = A64_CMPXri, .rn = 10, .imm = 8192});
-    ins(&f, bcond(CC_LO, l2));
-    SRC(&f, "    return sum;                       // 1044480");
-    ins(&f, rr(A64_MOVWr, 0, 0, 12));
-    ins(&f, (MInst){.op = A64_P_EPILOGUE});
-    SRC(&f, "}");
-    a64m_emit_function(&M, &f);
-    mf_free(&f);
+static void BuildBigFrame(void)
+{
+  MirFunc f;
+  MirFuncInit(&f, "big_frame", true, (FrameDesc){.locals = 8192});
+  SRC(&f, "static int big_frame(void) {       // 8 KiB frame: __chkstk probe");
+  Ins(&f, (MirInst){.op = A64OpPseudoPrologue});
+  SRC(&f, "    unsigned char buf[8192]; int sum = 0;");
+  Ins(&f, (MirInst){.op = A64OpMOVXsp, .rd = 8, .rn = A64_SP});
+  Ins(&f, (MirInst){.op = A64OpMOVZX, .rd = 10});
+  Ins(&f, (MirInst){.op = A64OpMOVZW, .rd = 12});
+  u32 l1 = MirFuncNewLabel(&f), l2 = MirFuncNewLabel(&f);
+  SRC(&f, "    for (size_t i = 0; i < 8192; i++) buf[i] = (unsigned char)i;");
+  MirFuncLabel(&f, l1);
+  Ins(&f, (MirInst){.op = A64OpSTRBBro, .rd = 10, .rn = 8, .rm = 10, .shift = A64ExtendUxtx});
+  Ins(&f, Ri(A64OpADDXri, 10, 10, 1));
+  Ins(&f, (MirInst){.op = A64OpCMPXri, .rn = 10, .imm = 8192});
+  Ins(&f, Bcond(A64CondLo, l1));
+  SRC(&f, "    for (size_t i = 0; i < 8192; i++) sum += buf[i];");
+  Ins(&f, (MirInst){.op = A64OpMOVZX, .rd = 10});
+  MirFuncLabel(&f, l2);
+  Ins(&f, (MirInst){.op = A64OpLDRBBro, .rd = 11, .rn = 8, .rm = 10, .shift = A64ExtendUxtx});
+  Ins(&f, Rr(A64OpADDWrs, 12, 12, 11));
+  Ins(&f, Ri(A64OpADDXri, 10, 10, 1));
+  Ins(&f, (MirInst){.op = A64OpCMPXri, .rn = 10, .imm = 8192});
+  Ins(&f, Bcond(A64CondLo, l2));
+  SRC(&f, "    return sum;                       // 1044480");
+  Ins(&f, Rr(A64OpMOVWr, 0, 0, 12));
+  Ins(&f, (MirInst){.op = A64OpPseudoEpilogue});
+  SRC(&f, "}");
+  A64ModuleEmitFunction(&g_module, &f);
+  MirFuncFree(&f);
 }
 
 /* sum_va(n, ...): variadic, homes x0-x7 next to the stack arguments. */
-static void build_sum_va(void) {
-    MFunc f;
-    mf_init(&f, "sum_va", true, (FrameDesc){.home_args = true});
-    FramePlan plan;
-    frame_plan(&f.frame, &plan);
-    SRC(&f, "static long long sum_va(int n, ...) {   // variadic: x0-x7 homed");
-    ins(&f, (MInst){.op = A64_P_PROLOGUE});
-    SRC(&f, "    va_list ap; va_start(ap, n); long long s = 0;");
-    ins(&f, ri(A64_ADDXri, 9, A64_SP, plan.home_sp_offset + 8));
-    ins(&f, rr(A64_MOVWr, 10, 0, 0));
-    ins(&f, rr(A64_MOVXr, 0, 0, A64_ZR));
-    u32 loop = mf_new_label(&f), done = mf_new_label(&f);
-    SRC(&f, "    while (n--) s += va_arg(ap, long long);");
-    ins(&f, (MInst){.op = A64_CBZW, .rd = 10, .tkind = TK_LABEL, .target = done});
-    mf_label(&f, loop);
-    ins(&f, ri(A64_LDRXui, 11, 9, 0));
-    ins(&f, ri(A64_ADDXri, 9, 9, 8));
-    ins(&f, rr(A64_ADDXrs, 0, 0, 11));
-    ins(&f, ri(A64_SUBSWri, 10, 10, 1));
-    ins(&f, bcond(CC_NE, loop));
-    mf_label(&f, done);
-    SRC(&f, "    return s;");
-    ins(&f, (MInst){.op = A64_P_EPILOGUE});
-    SRC(&f, "}");
-    a64m_emit_function(&M, &f);
-    mf_free(&f);
+static void BuildSumVa(void)
+{
+  MirFunc f;
+  MirFuncInit(&f, "sum_va", true, (FrameDesc){.homeArgs = true});
+  FramePlan plan;
+  FramePlanBuild(&f.frame, &plan);
+  SRC(&f, "static long long sum_va(int n, ...) {   // variadic: x0-x7 homed");
+  Ins(&f, (MirInst){.op = A64OpPseudoPrologue});
+  SRC(&f, "    va_list ap; va_start(ap, n); long long s = 0;");
+  Ins(&f, Ri(A64OpADDXri, 9, A64_SP, plan.homeSpOffset + 8));
+  Ins(&f, Rr(A64OpMOVWr, 10, 0, 0));
+  Ins(&f, Rr(A64OpMOVXr, 0, 0, A64_ZR));
+  u32 loop = MirFuncNewLabel(&f), done = MirFuncNewLabel(&f);
+  SRC(&f, "    while (n--) s += va_arg(ap, long long);");
+  Ins(&f, (MirInst){.op = A64OpCBZW, .rd = 10, .tkind = A64TargetKindLabel, .target = done});
+  MirFuncLabel(&f, loop);
+  Ins(&f, Ri(A64OpLDRXui, 11, 9, 0));
+  Ins(&f, Ri(A64OpADDXri, 9, 9, 8));
+  Ins(&f, Rr(A64OpADDXrs, 0, 0, 11));
+  Ins(&f, Ri(A64OpSUBSWri, 10, 10, 1));
+  Ins(&f, Bcond(A64CondNe, loop));
+  MirFuncLabel(&f, done);
+  SRC(&f, "    return s;");
+  Ins(&f, (MirInst){.op = A64OpPseudoEpilogue});
+  SRC(&f, "}");
+  A64ModuleEmitFunction(&g_module, &f);
+  MirFuncFree(&f);
 }
 
 /* write_all(h, buf, len): WriteFile via the import address table. */
-static void build_write_all(void) {
-    MFunc f;
-    mf_init(&f, "write_all", true, (FrameDesc){.locals = 16});
-    FramePlan plan;
-    frame_plan(&f.frame, &plan);
-    SRC(&f, "static void write_all(HANDLE h, const char *p, DWORD n) {");
-    ins(&f, (MInst){.op = A64_P_PROLOGUE});
-    SRC(&f, "    DWORD written; WriteFile(h, p, n, &written, NULL);   // __imp_WriteFile");
-    ins(&f, ri(A64_ADDXri, 3, A64_SP, plan.locals_sp_offset));
-    mov(&f, 4, A64_ZR);
-    call_import(&f, "WriteFile");
-    ins(&f, (MInst){.op = A64_P_EPILOGUE});
-    SRC(&f, "}");
-    a64m_emit_function(&M, &f);
-    mf_free(&f);
+static void BuildWriteAll(void)
+{
+  MirFunc f;
+  MirFuncInit(&f, "write_all", true, (FrameDesc){.locals = 16});
+  FramePlan plan;
+  FramePlanBuild(&f.frame, &plan);
+  SRC(&f, "static void write_all(HANDLE h, const char *p, DWORD n) {");
+  Ins(&f, (MirInst){.op = A64OpPseudoPrologue});
+  SRC(&f, "    DWORD written; WriteFile(h, p, n, &written, NULL);   // __imp_WriteFile");
+  Ins(&f, Ri(A64OpADDXri, 3, A64_SP, plan.localsSpOffset));
+  Mov(&f, 4, A64_ZR);
+  CallImport(&f, "WriteFile");
+  Ins(&f, (MirInst){.op = A64OpPseudoEpilogue});
+  SRC(&f, "}");
+  A64ModuleEmitFunction(&g_module, &f);
+  MirFuncFree(&f);
 }
 
 /* print_uint(h, v): decimal conversion into a local buffer. */
-static void build_print_uint(void) {
-    MFunc f;
-    mf_init(&f, "print_uint", true, (FrameDesc){.n_gpr = 1, .locals = 32});
-    FramePlan plan;
-    frame_plan(&f.frame, &plan);
-    u32 buf_end = plan.locals_sp_offset + 32;
-    SRC(&f, "static void print_uint(HANDLE h, unsigned v) {");
-    ins(&f, (MInst){.op = A64_P_PROLOGUE});
-    SRC(&f, "    char buf[32], *p = buf + 32; *--p = '\\n';");
-    mov(&f, 19, 0);
-    ins(&f, ri(A64_ADDXri, 9, A64_SP, buf_end));
-    ins(&f, ri(A64_SUBXri, 9, 9, 1));
-    ins(&f, (MInst){.op = A64_MOVZW, .rd = 10, .imm = '\n'});
-    ins(&f, ri(A64_STRBBui, 10, 9, 0));
-    ins(&f, (MInst){.op = A64_MOVZW, .rd = 11, .imm = 10});
-    u32 loop = mf_new_label(&f);
-    SRC(&f, "    do { *--p = '0' + v % 10; v /= 10; } while (v);");
-    mf_label(&f, loop);
-    ins(&f, rr(A64_UDIVW, 12, 1, 11));
-    ins(&f, (MInst){.op = A64_MSUBW, .rd = 13, .rn = 12, .rm = 11, .ra = 1});
-    ins(&f, ri(A64_ADDWri, 13, 13, '0'));
-    ins(&f, ri(A64_SUBXri, 9, 9, 1));
-    ins(&f, ri(A64_STRBBui, 13, 9, 0));
-    ins(&f, rr(A64_MOVWr, 1, 0, 12));
-    ins(&f, (MInst){.op = A64_CBNZW, .rd = 1, .tkind = TK_LABEL, .target = loop});
-    SRC(&f, "    write_all(h, p, (DWORD)(buf + 32 - p));");
-    ins(&f, ri(A64_ADDXri, 10, A64_SP, buf_end));
-    ins(&f, rr(A64_SUBXrs, 2, 10, 9));
-    mov(&f, 1, 9);
-    mov(&f, 0, 19);
-    call(&f, "write_all");
-    ins(&f, (MInst){.op = A64_P_EPILOGUE});
-    SRC(&f, "}");
-    a64m_emit_function(&M, &f);
-    mf_free(&f);
+static void BuildPrintUint(void)
+{
+  MirFunc f;
+  MirFuncInit(&f, "print_uint", true, (FrameDesc){.nGpr = 1, .locals = 32});
+  FramePlan plan;
+  FramePlanBuild(&f.frame, &plan);
+  u32 bufEnd = plan.localsSpOffset + 32;
+  SRC(&f, "static void print_uint(HANDLE h, unsigned v) {");
+  Ins(&f, (MirInst){.op = A64OpPseudoPrologue});
+  SRC(&f, "    char buf[32], *p = buf + 32; *--p = '\\n';");
+  Mov(&f, 19, 0);
+  Ins(&f, Ri(A64OpADDXri, 9, A64_SP, bufEnd));
+  Ins(&f, Ri(A64OpSUBXri, 9, 9, 1));
+  Ins(&f, (MirInst){.op = A64OpMOVZW, .rd = 10, .imm = '\n'});
+  Ins(&f, Ri(A64OpSTRBBui, 10, 9, 0));
+  Ins(&f, (MirInst){.op = A64OpMOVZW, .rd = 11, .imm = 10});
+  u32 loop = MirFuncNewLabel(&f);
+  SRC(&f, "    do { *--p = '0' + v % 10; v /= 10; } while (v);");
+  MirFuncLabel(&f, loop);
+  Ins(&f, Rr(A64OpUDIVW, 12, 1, 11));
+  Ins(&f, (MirInst){.op = A64OpMSUBW, .rd = 13, .rn = 12, .rm = 11, .ra = 1});
+  Ins(&f, Ri(A64OpADDWri, 13, 13, '0'));
+  Ins(&f, Ri(A64OpSUBXri, 9, 9, 1));
+  Ins(&f, Ri(A64OpSTRBBui, 13, 9, 0));
+  Ins(&f, Rr(A64OpMOVWr, 1, 0, 12));
+  Ins(&f, (MirInst){.op = A64OpCBNZW, .rd = 1, .tkind = A64TargetKindLabel, .target = loop});
+  SRC(&f, "    write_all(h, p, (DWORD)(buf + 32 - p));");
+  Ins(&f, Ri(A64OpADDXri, 10, A64_SP, bufEnd));
+  Ins(&f, Rr(A64OpSUBXrs, 2, 10, 9));
+  Mov(&f, 1, 9);
+  Mov(&f, 0, 19);
+  Call(&f, "write_all");
+  Ins(&f, (MirInst){.op = A64OpPseudoEpilogue});
+  SRC(&f, "}");
+  A64ModuleEmitFunction(&g_module, &f);
+  MirFuncFree(&f);
 }
 
 /* Prints a label string followed by the value in w1 (x19 holds the handle). */
-static void say(MFunc *f, const char *sym, const char *text) {
-    emit_string(sym, text);
-    mov(f, 0, 19);
-    addr_of(f, 1, sym);
-    mf_mov_imm(f, 2, strlen(text), true);
-    call(f, "write_all");
+static void Say(MirFunc* _f, const char* _sym, const char* _text)
+{
+  EmitString(_sym, _text);
+  Mov(_f, 0, 19);
+  AddrOf(_f, 1, _sym);
+  MirFuncMovImm(_f, 2, strlen(_text), true);
+  Call(_f, "write_all");
 }
 
-static void build_p0_main(void) {
-    MFunc f;
-    mf_init(&f, "p0_main", false, (FrameDesc){.n_gpr = 2});
-    SRC(&f, "int p0_main(void) {");
-    ins(&f, (MInst){.op = A64_P_PROLOGUE});
-    SRC(&f, "    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);        // __imp_GetStdHandle");
-    mf_mov_imm(&f, 0, (u32)-11, true);
-    call_import(&f, "GetStdHandle");
-    mov(&f, 19, 0);
+static void BuildP0Main(void)
+{
+  MirFunc f;
+  MirFuncInit(&f, "p0_main", false, (FrameDesc){.nGpr = 2});
+  SRC(&f, "int p0_main(void) {");
+  Ins(&f, (MirInst){.op = A64OpPseudoPrologue});
+  SRC(&f, "    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);        // __imp_GetStdHandle");
+  MirFuncMovImm(&f, 0, (u32)-11, true);
+  CallImport(&f, "GetStdHandle");
+  Mov(&f, 19, 0);
 
-    SRC(&f, "    puts(\"NeuronCompiler phase 0 ...\");");
-    say(&f, "msg_hello", "NeuronCompiler phase 0: hand-built ARM64, no CRT\n");
+  SRC(&f, "    puts(\"NeuronCompiler phase 0 ...\");");
+  Say(&f, "msg_hello", "NeuronCompiler phase 0: hand-built ARM64, no CRT\n");
 
-    SRC(&f, "    print(\"sum of squares 1..10 = \", sum_squares(10));     // 385");
-    say(&f, "msg_squares", "sum of squares 1..10 = ");
-    mf_mov_imm(&f, 0, 10, true);
-    call(&f, "sum_squares");
-    ins(&f, rr(A64_MOVWr, 1, 0, 0));
-    mov(&f, 0, 19);
-    call(&f, "print_uint");
+  SRC(&f, "    print(\"sum of squares 1..10 = \", sum_squares(10));     // 385");
+  Say(&f, "msg_squares", "sum of squares 1..10 = ");
+  MirFuncMovImm(&f, 0, 10, true);
+  Call(&f, "sum_squares");
+  Ins(&f, Rr(A64OpMOVWr, 1, 0, 0));
+  Mov(&f, 0, 19);
+  Call(&f, "print_uint");
 
-    SRC(&f, "    print(\"8 KiB frame checksum = \", big_frame());         // 1044480");
-    say(&f, "msg_big", "8 KiB frame checksum = ");
-    call(&f, "big_frame");
-    ins(&f, rr(A64_MOVWr, 1, 0, 0));
-    mov(&f, 0, 19);
-    call(&f, "print_uint");
+  SRC(&f, "    print(\"8 KiB frame checksum = \", big_frame());         // 1044480");
+  Say(&f, "msg_big", "8 KiB frame checksum = ");
+  Call(&f, "big_frame");
+  Ins(&f, Rr(A64OpMOVWr, 1, 0, 0));
+  Mov(&f, 0, 19);
+  Call(&f, "print_uint");
 
-    SRC(&f, "    print(\"variadic sum(10, 20, 30) = \", sum_va(3, 10, 20, 30));   // 60");
-    say(&f, "msg_va", "variadic sum(10, 20, 30) = ");
-    mf_mov_imm(&f, 0, 3, false);
-    mf_mov_imm(&f, 1, 10, false);
-    mf_mov_imm(&f, 2, 20, false);
-    mf_mov_imm(&f, 3, 30, false);
-    call(&f, "sum_va");
-    ins(&f, rr(A64_MOVWr, 1, 0, 0));
-    mov(&f, 0, 19);
-    call(&f, "print_uint");
+  SRC(&f, "    print(\"variadic sum(10, 20, 30) = \", sum_va(3, 10, 20, 30));   // 60");
+  Say(&f, "msg_va", "variadic sum(10, 20, 30) = ");
+  MirFuncMovImm(&f, 0, 3, false);
+  MirFuncMovImm(&f, 1, 10, false);
+  MirFuncMovImm(&f, 2, 20, false);
+  MirFuncMovImm(&f, 3, 30, false);
+  Call(&f, "sum_va");
+  Ins(&f, Rr(A64OpMOVWr, 1, 0, 0));
+  Mov(&f, 0, 19);
+  Call(&f, "print_uint");
 
-    SRC(&f, "    write_all(out, table[1], ...);          // pointer from an ADDR64 relocation");
-    static const char ok[] = "data relocation ok\n";
-    emit_string("msg_ok", ok);
-    emit_string("msg_unused", "unused\n");
-    u8 zeros[16] = {};
-    A64DataReloc rel[2] = {{0, a64m_sym(&M, "msg_unused")}, {8, a64m_sym(&M, "msg_ok")}};
-    a64m_emit_data(&M, "table", true, DATA_RW, zeros, 16, 8, rel, 2);
-    addr_of(&f, 8, "table");
-    ins(&f, ri(A64_LDRXui, 1, 8, 8));
-    mf_mov_imm(&f, 2, sizeof ok - 1, true);
-    mov(&f, 0, 19);
-    call(&f, "write_all");
+  SRC(&f, "    write_all(out, table[1], ...);          // pointer from an ADDR64 relocation");
+  static const char OK[] = "data relocation ok\n";
+  EmitString("msg_ok", OK);
+  EmitString("msg_unused", "unused\n");
+  u8 zeros[16] = {};
+  A64DataReloc rel[2] = {{0, A64ModuleSym(&g_module, "msg_unused")}, {8, A64ModuleSym(&g_module, "msg_ok")}};
+  A64ModuleEmitData(&g_module, "table", true, A64DataKindRw, zeros, 16, 8, rel, 2);
+  AddrOf(&f, 8, "table");
+  Ins(&f, Ri(A64OpLDRXui, 1, 8, 8));
+  MirFuncMovImm(&f, 2, sizeof OK - 1, true);
+  Mov(&f, 0, 19);
+  Call(&f, "write_all");
 
-    SRC(&f, "    return 0;");
-    ins(&f, (MInst){.op = A64_MOVZW, .rd = 0});
-    ins(&f, (MInst){.op = A64_P_EPILOGUE});
-    SRC(&f, "}");
-    a64m_emit_function(&M, &f);
-    mf_free(&f);
+  SRC(&f, "    return 0;");
+  Ins(&f, (MirInst){.op = A64OpMOVZW, .rd = 0});
+  Ins(&f, (MirInst){.op = A64OpPseudoEpilogue});
+  SRC(&f, "}");
+  A64ModuleEmitFunction(&g_module, &f);
+  MirFuncFree(&f);
 }
 
 /* Entry point without a CRT: never returns, so it has no epilogue. */
-static void build_p0_start(void) {
-    MFunc f;
-    mf_init(&f, "p0_start", false, (FrameDesc){});
-    SRC(&f, "void p0_start(void) {                    // /ENTRY: no epilogue");
-    ins(&f, (MInst){.op = A64_P_PROLOGUE});
-    SRC(&f, "    ExitProcess(p0_main());                // ExitProcess via import thunk");
-    call(&f, "p0_main");
-    call(&f, "ExitProcess");
-    ins(&f, (MInst){.op = A64_BRK, .imm = 0xF000});
-    SRC(&f, "}");
-    a64m_emit_function(&M, &f);
-    mf_free(&f);
+static void BuildP0Start(void)
+{
+  MirFunc f;
+  MirFuncInit(&f, "p0_start", false, (FrameDesc){});
+  SRC(&f, "void p0_start(void) {                    // /ENTRY: no epilogue");
+  Ins(&f, (MirInst){.op = A64OpPseudoPrologue});
+  SRC(&f, "    ExitProcess(p0_main());                // ExitProcess via import thunk");
+  Call(&f, "p0_main");
+  Call(&f, "ExitProcess");
+  Ins(&f, (MirInst){.op = A64OpBRK, .imm = 0xF000});
+  SRC(&f, "}");
+  A64ModuleEmitFunction(&g_module, &f);
+  MirFuncFree(&f);
 }
 
 /* Our own stack probe for the no-CRT build: touches every page of the
  * requested allocation (x15 = size / 16) below sp. Preserves x15. */
-static void build_chkstk(void) {
-    MFunc f;
-    mf_init(&f, "__chkstk", false, (FrameDesc){.frameless = true});
-    SRC(&f, "void __chkstk(void) {                   // x15 = size/16; probes each page");
-    ins(&f, (MInst){.op = A64_P_PROLOGUE});
-    ins(&f, (MInst){.op = A64_LSLXi, .rd = 16, .rn = 15, .amount = 4});
-    ins(&f, (MInst){.op = A64_MOVXsp, .rd = 17, .rn = A64_SP});
-    u32 loop = mf_new_label(&f);
-    mf_label(&f, loop);
-    ins(&f, ri(A64_SUBXri, 17, 17, 4096));
-    ins(&f, ri(A64_LDRXui, A64_ZR, 17, 0));
-    ins(&f, ri(A64_SUBSXri, 16, 16, 4096));
-    ins(&f, bcond(CC_GT, loop));
-    ins(&f, (MInst){.op = A64_P_EPILOGUE});
-    SRC(&f, "}");
-    a64m_emit_function(&M, &f);
-    mf_free(&f);
+static void BuildChkstk(void)
+{
+  MirFunc f;
+  MirFuncInit(&f, "__chkstk", false, (FrameDesc){.frameless = true});
+  SRC(&f, "void __chkstk(void) {                   // x15 = size/16; probes each page");
+  Ins(&f, (MirInst){.op = A64OpPseudoPrologue});
+  Ins(&f, (MirInst){.op = A64OpLSLXi, .rd = 16, .rn = 15, .amount = 4});
+  Ins(&f, (MirInst){.op = A64OpMOVXsp, .rd = 17, .rn = A64_SP});
+  u32 loop = MirFuncNewLabel(&f);
+  MirFuncLabel(&f, loop);
+  Ins(&f, Ri(A64OpSUBXri, 17, 17, 4096));
+  Ins(&f, Ri(A64OpLDRXui, A64_ZR, 17, 0));
+  Ins(&f, Ri(A64OpSUBSXri, 16, 16, 4096));
+  Ins(&f, Bcond(A64CondGt, loop));
+  Ins(&f, (MirInst){.op = A64OpPseudoEpilogue});
+  SRC(&f, "}");
+  A64ModuleEmitFunction(&g_module, &f);
+  MirFuncFree(&f);
 }
 
 /* main() for the MSVC CRT: printf, TLS, the CRT's __chkstk. */
-static void build_crt_main(void) {
-    a64m_emit_data(&M, "tls_counter", false, DATA_TLS, (const u8[]){100, 0, 0, 0}, 4, 4,
-                   nullptr, 0);
-    emit_string("fmt1", "%s from ncc phase 0: %d, thread-local counter = %d\n");
-    emit_string("str_hello", "hello");
-    emit_string("fmt2", "8 KiB frame checksum = %d, variadic sum = %lld\n");
+static void BuildCrtMain(void)
+{
+  A64ModuleEmitData(&g_module, "tls_counter", false, A64DataKindTls, (const u8[]){100, 0, 0, 0}, 4, 4, nullptr, 0);
+  EmitString("fmt1", "%s from ncc phase 0: %d, thread-local counter = %d\n");
+  EmitString("str_hello", "hello");
+  EmitString("fmt2", "8 KiB frame checksum = %d, variadic sum = %lld\n");
 
-    MFunc f;
-    mf_init(&f, "main", false, (FrameDesc){.n_gpr = 2});
-    SRC(&f, "int main(void) {");
-    ins(&f, (MInst){.op = A64_P_PROLOGUE});
-    SRC(&f, "    int t = ++tls_counter;                // implicit TLS: x18 + 0x58, _tls_index");
-    ins(&f, ri(A64_LDRXui, 8, A64_X18, 0x58));
-    u32 ti = a64m_sym(&M, "_tls_index");
-    ins(&f, (MInst){.op = A64_ADRP, .rd = 9, .tkind = TK_SYM, .target = ti});
-    ins(&f, (MInst){.op = A64_LDRWui, .rd = 9, .rn = 9, .tkind = TK_SYM, .target = ti});
-    ins(&f, (MInst){.op = A64_LDRXro, .rd = 8, .rn = 8, .rm = 9, .shift = EX_UXTX, .amount = 1});
-    u32 tc = a64m_sym(&M, "tls_counter");
-    ins(&f, (MInst){.op = A64_ADDXri, .rd = 8, .rn = 8, .tkind = TK_SYM, .target = tc,
-                    .smod = SM_SECREL_HI12});
-    ins(&f, (MInst){.op = A64_ADDXri, .rd = 8, .rn = 8, .tkind = TK_SYM, .target = tc,
-                    .smod = SM_SECREL_LO12});
-    ins(&f, ri(A64_LDRWui, 3, 8, 0));
-    ins(&f, ri(A64_ADDWri, 3, 3, 1));
-    ins(&f, ri(A64_STRWui, 3, 8, 0));
-    SRC(&f, "    printf(fmt1, \"hello\", 42, t);       // variadic call: all args in x0-x3");
-    addr_of(&f, 0, "fmt1");
-    addr_of(&f, 1, "str_hello");
-    mf_mov_imm(&f, 2, 42, true);
-    call(&f, "printf");
-    SRC(&f, "    int c = big_frame();");
-    call(&f, "big_frame");
-    mov(&f, 19, 0);
-    SRC(&f, "    long long s = sum_va(3, 10, 20, 30);");
-    mf_mov_imm(&f, 0, 3, false);
-    mf_mov_imm(&f, 1, 10, false);
-    mf_mov_imm(&f, 2, 20, false);
-    mf_mov_imm(&f, 3, 30, false);
-    call(&f, "sum_va");
-    mov(&f, 2, 0);
-    SRC(&f, "    printf(fmt2, c, s);");
-    ins(&f, rr(A64_MOVWr, 1, 0, 19));
-    addr_of(&f, 0, "fmt2");
-    call(&f, "printf");
-    SRC(&f, "    return 0;");
-    ins(&f, (MInst){.op = A64_MOVZW, .rd = 0});
-    ins(&f, (MInst){.op = A64_P_EPILOGUE});
-    SRC(&f, "}");
-    a64m_emit_function(&M, &f);
-    mf_free(&f);
+  MirFunc f;
+  MirFuncInit(&f, "main", false, (FrameDesc){.nGpr = 2});
+  SRC(&f, "int main(void) {");
+  Ins(&f, (MirInst){.op = A64OpPseudoPrologue});
+  SRC(&f, "    int t = ++tls_counter;                // implicit TLS: x18 + 0x58, _tls_index");
+  Ins(&f, Ri(A64OpLDRXui, 8, A64_X18, 0x58));
+  u32 ti = A64ModuleSym(&g_module, "_tls_index");
+  Ins(&f, (MirInst){.op = A64OpADRP, .rd = 9, .tkind = A64TargetKindSym, .target = ti});
+  Ins(&f, (MirInst){.op = A64OpLDRWui, .rd = 9, .rn = 9, .tkind = A64TargetKindSym, .target = ti});
+  Ins(&f, (MirInst){.op = A64OpLDRXro, .rd = 8, .rn = 8, .rm = 9, .shift = A64ExtendUxtx, .amount = 1});
+  u32 tc = A64ModuleSym(&g_module, "tls_counter");
+  Ins(&f, (MirInst){.op = A64OpADDXri, .rd = 8, .rn = 8, .tkind = A64TargetKindSym, .target = tc, .smod = A64SymModSecrelHi12});
+  Ins(&f, (MirInst){.op = A64OpADDXri, .rd = 8, .rn = 8, .tkind = A64TargetKindSym, .target = tc, .smod = A64SymModSecrelLo12});
+  Ins(&f, Ri(A64OpLDRWui, 3, 8, 0));
+  Ins(&f, Ri(A64OpADDWri, 3, 3, 1));
+  Ins(&f, Ri(A64OpSTRWui, 3, 8, 0));
+  SRC(&f, "    printf(fmt1, \"hello\", 42, t);       // variadic call: all args in x0-x3");
+  AddrOf(&f, 0, "fmt1");
+  AddrOf(&f, 1, "str_hello");
+  MirFuncMovImm(&f, 2, 42, true);
+  Call(&f, "printf");
+  SRC(&f, "    int c = big_frame();");
+  Call(&f, "big_frame");
+  Mov(&f, 19, 0);
+  SRC(&f, "    long long s = sum_va(3, 10, 20, 30);");
+  MirFuncMovImm(&f, 0, 3, false);
+  MirFuncMovImm(&f, 1, 10, false);
+  MirFuncMovImm(&f, 2, 20, false);
+  MirFuncMovImm(&f, 3, 30, false);
+  Call(&f, "sum_va");
+  Mov(&f, 2, 0);
+  SRC(&f, "    printf(fmt2, c, s);");
+  Ins(&f, Rr(A64OpMOVWr, 1, 0, 19));
+  AddrOf(&f, 0, "fmt2");
+  Call(&f, "printf");
+  SRC(&f, "    return 0;");
+  Ins(&f, (MirInst){.op = A64OpMOVZW, .rd = 0});
+  Ins(&f, (MirInst){.op = A64OpPseudoEpilogue});
+  SRC(&f, "}");
+  A64ModuleEmitFunction(&g_module, &f);
+  MirFuncFree(&f);
 }
 
 /* ---- main --------------------------------------------------------------- */
 
-static bool write_buf(const char *path, const Buf *b) {
-    if (!os_write_file_atomic(path, b->data, b->len)) {
-        fprintf(stderr, "p0demo: cannot write %s\n", path);
-        return false;
-    }
-    return true;
+static bool WriteBuf(const char* _path, const Buf* _b)
+{
+  if (!OsWriteFileAtomic(_path, _b->data, _b->len))
+  {
+    fprintf(stderr, "p0demo: cannot write %s\n", _path);
+    return false;
+  }
+  return true;
 }
 
-int main(int argc, char **argv) {
-    if (argc != 3 || (strcmp(argv[1], "nocrt") != 0 && strcmp(argv[1], "crt") != 0)) {
-        fprintf(stderr, "usage: p0demo nocrt|crt out.obj\n");
-        return 2;
-    }
-    bool crt = strcmp(argv[1], "crt") == 0;
-    const char *out = argv[2];
+int main(int argc, char** argv)
+{
+  if (argc != 3 || (strcmp(argv[1], "nocrt") != 0 && strcmp(argv[1], "crt") != 0))
+  {
+    fprintf(stderr, "usage: p0demo nocrt|crt out.obj\n");
+    return 2;
+  }
+  bool crt = strcmp(argv[1], "crt") == 0;
+  const char* out = argv[2];
 
-    Arena arena;
-    arena_init(&arena);
-    char *src_path = arena_printf(&arena, "%s.pseudo.c", out);
-    char *lst_path = arena_printf(&arena, "%s.lst", out);
-    a64m_init(&M, &arena, out, src_path, true);
+  Arena arena;
+  ArenaInit(&arena);
+  char* srcPath = ArenaPrintf(&arena, "%s.pseudo.c", out);
+  char* lstPath = ArenaPrintf(&arena, "%s.lst", out);
+  A64ModuleInit(&g_module, &arena, out, srcPath, true);
 
-    SRC(nullptr, "/* Pseudo-source for %s, generated by p0demo (%s mode). The machine code was", out,
-        argv[1]);
-    SRC(nullptr, " * built by hand; these lines exist so line tables have something to show. */");
+  SRC(nullptr, "/* Pseudo-source for %s, generated by p0demo (%s mode). The machine code was", out, argv[1]);
+  SRC(nullptr, " * built by hand; these lines exist so line tables have something to show. */");
 
-    build_sum_squares();
-    build_big_frame();
-    build_sum_va();
-    if (crt) {
-        build_crt_main();
-        a64m_directive(&M, "/DEFAULTLIB:msvcrt");
-        a64m_directive(&M, "/DEFAULTLIB:oldnames");
-        a64m_directive(&M, "/DEFAULTLIB:legacy_stdio_definitions");
-    } else {
-        build_write_all();
-        build_print_uint();
-        build_p0_main();
-        build_p0_start();
-        build_chkstk();
-        a64m_directive(&M, "/DEFAULTLIB:kernel32");
-    }
+  BuildSumSquares();
+  BuildBigFrame();
+  BuildSumVa();
+  if (crt)
+  {
+    BuildCrtMain();
+    A64ModuleDirective(&g_module, "/DEFAULTLIB:msvcrt");
+    A64ModuleDirective(&g_module, "/DEFAULTLIB:oldnames");
+    A64ModuleDirective(&g_module, "/DEFAULTLIB:legacy_stdio_definitions");
+  }
+  else
+  {
+    BuildWriteAll();
+    BuildPrintUint();
+    BuildP0Main();
+    BuildP0Start();
+    BuildChkstk();
+    A64ModuleDirective(&g_module, "/DEFAULTLIB:kernel32");
+  }
 
-    Buf obj = {};
-    a64m_finish(&M, &obj);
-    bool ok = write_buf(out, &obj) && write_buf(src_path, &src) && write_buf(lst_path, &M.listing);
-    if (ok)
-        printf("p0demo: wrote %s (%u bytes): %u functions, %u packed unwind, %u xdata, "
-               "all unwind data verified\n",
-               out, obj.len, M.nfuncs, M.npacked, M.nxdata);
-    buf_free(&obj);
-    buf_free(&src);
-    a64m_free(&M);
-    arena_release(&arena);
-    return ok ? 0 : 1;
+  Buf obj = {};
+  A64ModuleFinish(&g_module, &obj);
+  bool ok = WriteBuf(out, &obj) && WriteBuf(srcPath, &g_src) && WriteBuf(lstPath, &g_module.listing);
+  if (ok)
+    printf("p0demo: wrote %s (%u bytes): %u functions, %u packed unwind, %u xdata, "
+           "all unwind data verified\n",
+           out, obj.len, g_module.nfuncs, g_module.npacked, g_module.nxdata);
+  BufFree(&obj);
+  BufFree(&g_src);
+  A64ModuleFree(&g_module);
+  ArenaRelease(&arena);
+  return ok ? 0 : 1;
 }

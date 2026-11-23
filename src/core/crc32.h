@@ -4,10 +4,10 @@
 #include "core.h"
 
 /* Raw reflected CRC-32 update (no pre/post inversion). */
-u32 nc_crc32_update(u32 crc, const void *data, size_t n);
+u32 Crc32Update(u32 _crc, const void* _data, size_t _n);
 
 /* JamCRC: CRC-32 with initial value ~0 and no final inversion. This is the
  * checksum MSVC and LLVM store in COFF COMDAT section auxiliary records. */
-u32 nc_jamcrc(const void *data, size_t n);
+u32 Crc32Jam(const void* _data, size_t _n);
 
 #endif
