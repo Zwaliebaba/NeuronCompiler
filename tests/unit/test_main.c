@@ -43,6 +43,10 @@ static const TestCase TESTS[] = {
   {"unwind", TestUnwind},
   {"coff", TestCoff},
   {"module", TestModule},
+  {"hmap", TestHmap},
+  {"sym", TestSym},
+  {"source", TestSource},
+  {"diag", TestDiag},
 };
 
 int main(int argc, char** argv)

@@ -1,0 +1,22 @@
+/* diag.def — the diagnostics table (Design/02 §3, Q-31). One row per
+ * diagnostic, expanded by DIAG(name, number, severity, level, message):
+ *
+ *   name      DiagId##name
+ *   number    NCnnnn, stable forever once released (Design/12 §6):
+ *             1xxx fatal, 2xxx-3xxx error, 4xxx warning, 0 for a note.
+ *             0xxx is taken by internal compiler errors (core.c).
+ *   severity  DiagSeverity##severity
+ *   level     for a warning, the lowest /W level that reports it (1-4);
+ *             0 for everything else
+ *   message   %0-%9 are the arguments, %% is a percent sign
+ *
+ * Rows are never removed or renumbered; a retired diagnostic keeps its row
+ * so that its number is never reused. */
+
+/*   name                  number  severity  level  message */
+DIAG(CannotOpenSource,     1001,   Fatal,    0,     "cannot open source file '%0'")
+DIAG(SourceTooLarge,       1002,   Fatal,    0,     "'%0' does not fit in the location space")
+DIAG(InvalidUtf16Source,   1003,   Fatal,    0,     "'%0' starts with a UTF-16 byte-order mark but is not valid UTF-16")
+DIAG(NullCharacterIgnored, 4001,   Warning,  1,     "null character ignored")
+DIAG(NoNewlineAtEof,       4002,   Warning,  4,     "no newline at end of file")
+DIAG(NoteIncludedFrom,     0,      Note,     0,     "in file included from here")

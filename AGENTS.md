@@ -270,7 +270,7 @@ These are conformance rules with a design source. Each cites it; if the design c
 
 **The checkers.** Three gates, each a Makefile target, so that no tool beyond the ones CI already installs is needed:
 
-- `make check-format` — `clang-format --dry-run --Werror` over every tracked `.c` and `.h`, pinned to clang-format 18.1.3, the version ubuntu-24.04 installs.
+- `make check-format` — `clang-format --dry-run --Werror` over every tracked `.c`, `.h` and `.inc`, pinned to clang-format 18.1.3, the version ubuntu-24.04 installs.
 - `make tidy` — clang-tidy over every `.c` under `src/` and `tests/`, once for the host and once for Windows ARM64 against the mingw-w64 headers (the way `check-windows` compiles), so the `_WIN32` half of the OS layer is linted too, pinned to clang-tidy 18.1.3 (Q-28).
 - `make check-tree` — R2's banned affixes, R7's file and directory names, R11's spelling families, the enumerator shape, and the two registries in §2 (a source directory missing from either build file; a test entry point missing from `test_main.c`). It is a small tool in `src/tools`, built by stage 0 like everything else, so that D-07 holds for the checker too.
 

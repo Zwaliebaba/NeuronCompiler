@@ -56,7 +56,7 @@ A consequence is that a user `/I` directory containing its own `stdint.h` (commo
 
 ## 6. Diagnostics format
 
-`file(line,col): error NC1234: message` and `warning NC4xxx`, plus caret snippets when the console supports it (not when `MSBUILD_*` environment indicates a build log). Error numbers are stable across releases.
+`file(line,col): error NC2nnn: message` and `warning NC4nnn`, plus caret snippets when the console supports it (not when `MSBUILD_*` environment indicates a build log). Error numbers are stable across releases: `NC1xxx` fatal, `NC2xxx`–`NC3xxx` errors, `NC4xxx` warnings, `NC0xxx` internal compiler errors, notes unnumbered (Q-31).
 
 ## Decisions
 
