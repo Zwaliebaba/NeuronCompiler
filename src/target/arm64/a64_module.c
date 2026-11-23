@@ -4,364 +4,459 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-static const char *sym_name_cb(void *ctx, u32 sym) {
-    A64Module *m = ctx;
-    return sym < m->sym_names.len ? m->sym_names.data[sym] : "<badsym>";
+static const char* SymNameCb(void* _ctx, u32 _sym)
+{
+  A64Module* m = _ctx;
+  return _sym < m->symNames.len ? m->symNames.data[_sym] : "<badsym>";
 }
 
-void a64m_init(A64Module *m, Arena *arena, const char *obj_name, const char *source_name,
-               bool debug) {
-    memset(m, 0, sizeof *m);
-    m->arena = arena;
-    m->debug = debug;
-    m->verify_unwind = true;
-    coff_init(&m->obj, arena);
-    if (debug) cv_init(&m->cv, arena, obj_name, source_name);
-    m->chkstk_sym = a64m_sym(m, "__chkstk");
+void A64ModuleInit(A64Module* _m, Arena* _arena, const char* _objName, const char* _sourceName, bool _debug)
+{
+  memset(_m, 0, sizeof *_m);
+  _m->arena = _arena;
+  _m->debug = _debug;
+  _m->verifyUnwind = true;
+  CoffInit(&_m->obj, _arena);
+  if (_debug)
+    CvInit(&_m->cv, _arena, _objName, _sourceName);
+  _m->chkstkSym = A64ModuleSym(_m, "__chkstk");
 }
 
-void a64m_free(A64Module *m) {
-    coff_free(&m->obj);
-    if (m->debug) cv_free(&m->cv);
-    vec_free(&m->sym_names);
-    vec_free(&m->sym_coff);
-    buf_free(&m->listing);
+void A64ModuleFree(A64Module* _m)
+{
+  CoffFree(&_m->obj);
+  if (_m->debug)
+    CvFree(&_m->cv);
+  VEC_FREE(&_m->symNames);
+  VEC_FREE(&_m->symCoff);
+  BufFree(&_m->listing);
 }
 
 /* Linear lookup is adequate for phase-0 object sizes; the front end will use
  * the interned-symbol hash map (Design/02 §3) instead. */
-u32 a64m_sym(A64Module *m, const char *name) {
-    for (u32 i = 0; i < m->sym_names.len; i++)
-        if (strcmp(m->sym_names.data[i], name) == 0) return i;
-    vec_push(&m->sym_names, arena_strdup(m->arena, name));
-    vec_push(&m->sym_coff, coff_symbol_named(&m->obj, name));
-    return m->sym_names.len - 1;
+u32 A64ModuleSym(A64Module* _m, const char* _name)
+{
+  for (u32 i = 0; i < _m->symNames.len; i++)
+    if (strcmp(_m->symNames.data[i], _name) == 0)
+      return i;
+  VEC_PUSH(&_m->symNames, ArenaStrdup(_m->arena, _name));
+  VEC_PUSH(&_m->symCoff, CoffSymbolNamed(&_m->obj, _name));
+  return _m->symNames.len - 1;
 }
 
-void a64m_directive(A64Module *m, const char *d) { coff_add_directive(&m->obj, d); }
+void A64ModuleDirective(A64Module* _m, const char* _d)
+{
+  CoffAddDirective(&_m->obj, _d);
+}
 
-static void listing_printf(A64Module *m, const char *fmt, ...) {
-    char tmp[512];
-    va_list ap;
-    va_start(ap, fmt);
-    int n = vsnprintf(tmp, sizeof tmp, fmt, ap);
-    va_end(ap);
-    if (n > 0) buf_bytes(&m->listing, tmp, (u32)NC_MIN((size_t)n, sizeof tmp - 1));
+static void ListingPrintf(A64Module* _m, const char* _fmt, ...)
+{
+  char tmp[512];
+  va_list ap;
+  va_start(ap, _fmt);
+  int n = vsnprintf(tmp, sizeof tmp, _fmt, ap);
+  va_end(ap);
+  if (n > 0)
+    BufBytes(&_m->listing, tmp, (u32)NC_MIN((size_t)n, sizeof tmp - 1));
 }
 
 /* ---- branch relaxation -------------------------------------------------- */
 
-static u32 inst_size(const FramePlan *p, const MInst *mi) {
-    switch (mi->op) {
-    case A64_P_LABEL: return 0;
-    case A64_P_PROLOGUE: return 4 * frame_prologue_len(p);
-    case A64_P_EPILOGUE: return 4 * frame_epilogue_len(p);
-    default: return 4;
-    }
+static u32 InstSize(const FramePlan* _p, const MirInst* _mi)
+{
+  switch (_mi->op)
+  {
+  case A64OpPseudoLabel:
+    return 0;
+  case A64OpPseudoPrologue:
+    return 4 * FramePrologueLen(_p);
+  case A64OpPseudoEpilogue:
+    return 4 * FrameEpilogueLen(_p);
+  default:
+    return 4;
+  }
 }
 
-static void compute_layout(const FramePlan *p, const MFunc *f, u32 *offs, u32 *label_off) {
-    u32 pos = 0;
-    for (u32 i = 0; i < f->insts.len; i++) {
-        const MInst *mi = &f->insts.data[i];
-        offs[i] = pos;
-        if (mi->op == A64_P_LABEL) label_off[mi->target] = pos;
-        pos += inst_size(p, mi);
-    }
-    offs[f->insts.len] = pos;
+static void ComputeLayout(const FramePlan* _p, const MirFunc* _f, u32* _offs, u32* _labelOff)
+{
+  u32 pos = 0;
+  for (u32 i = 0; i < _f->insts.len; i++)
+  {
+    const MirInst* mi = &_f->insts.data[i];
+    _offs[i] = pos;
+    if (mi->op == A64OpPseudoLabel)
+      _labelOff[mi->target] = pos;
+    pos += InstSize(_p, mi);
+  }
+  _offs[_f->insts.len] = pos;
 }
 
-static bool is_cond_branch(u16 op) {
-    if (op >= A64_NUM_REAL) return false;
-    A64Form fm = a64_insn_info[op].form;
-    return fm == F_BCOND || fm == F_CB || fm == F_TB;
+static bool IsCondBranch(u16 _op)
+{
+  if (_op >= A64OpRealCount)
+    return false;
+  A64Form fm = A64_INSN_INFO[_op].form;
+  return fm == A64FormBcond || fm == A64FormCb || fm == A64FormTb;
 }
 
-static u16 invert_branch(u16 op) {
-    switch (op) {
-    case A64_Bcc: return A64_Bcc;
-    case A64_CBZX: return A64_CBNZX;
-    case A64_CBNZX: return A64_CBZX;
-    case A64_CBZW: return A64_CBNZW;
-    case A64_CBNZW: return A64_CBZW;
-    case A64_TBZ: return A64_TBNZ;
-    case A64_TBNZ: return A64_TBZ;
-    }
-    NC_UNREACHABLE();
+static u16 InvertBranch(u16 _op)
+{
+  switch (_op)
+  {
+  case A64OpBcc:
+    return A64OpBcc;
+  case A64OpCBZX:
+    return A64OpCBNZX;
+  case A64OpCBNZX:
+    return A64OpCBZX;
+  case A64OpCBZW:
+    return A64OpCBNZW;
+  case A64OpCBNZW:
+    return A64OpCBZW;
+  case A64OpTBZ:
+    return A64OpTBNZ;
+  case A64OpTBNZ:
+    return A64OpTBZ;
+  default:
+    break;
+  }
+  NC_UNREACHABLE();
 }
 
 /* Replaces out-of-range conditional branches by an inverted short branch
  * around an unconditional b. Offsets only grow, so this terminates. */
-static void relax_branches(const FramePlan *p, MFunc *f) {
-    for (;;) {
-        u32 *offs = nc_xrealloc(nullptr, sizeof(u32) * (f->insts.len + 1));
-        u32 *lab = nc_xrealloc(nullptr, sizeof(u32) * (f->nlabels + 1));
-        compute_layout(p, f, offs, lab);
-        i32 fix = -1;
-        for (u32 i = 0; i < f->insts.len && fix < 0; i++) {
-            MInst *mi = &f->insts.data[i];
-            if (mi->tkind != TK_LABEL) continue;
-            i64 d = (i64)lab[mi->target] - (i64)offs[i];
-            i64 range = a64_branch_range((A64Op)mi->op);
-            if (d >= -range && d < range) continue;
-            if (!is_cond_branch(mi->op))
-                nc_fatal("branch from %s+%u is out of range", f->name, offs[i]);
-            fix = (i32)i;
-        }
-        nc_xfree(offs);
-        nc_xfree(lab);
-        if (fix < 0) return;
-
-        MInst orig = f->insts.data[fix];
-        u32 skip = f->nlabels++;
-        MInst inv = orig;
-        inv.op = invert_branch(orig.op);
-        if (orig.op == A64_Bcc) inv.shift = a64_cond_invert((A64Cond)orig.shift);
-        inv.target = skip;
-        MInst far = {.op = A64_B, .tkind = TK_LABEL, .target = orig.target, .line = orig.line};
-        MInst lbl = {.op = A64_P_LABEL, .target = skip, .line = orig.line};
-        vec_reserve(&f->insts, f->insts.len + 2);
-        memmove(&f->insts.data[fix + 3], &f->insts.data[fix + 1],
-                sizeof(MInst) * (f->insts.len - (u32)fix - 1));
-        f->insts.data[fix] = inv;
-        f->insts.data[fix + 1] = far;
-        f->insts.data[fix + 2] = lbl;
-        f->insts.len += 2;
+static void RelaxBranches(const FramePlan* _p, MirFunc* _f)
+{
+  for (;;)
+  {
+    u32* offs = NcXrealloc(nullptr, sizeof(u32) * (_f->insts.len + 1));
+    u32* lab = NcXrealloc(nullptr, sizeof(u32) * (_f->nlabels + 1));
+    ComputeLayout(_p, _f, offs, lab);
+    i32 fix = -1;
+    for (u32 i = 0; i < _f->insts.len && fix < 0; i++)
+    {
+      MirInst* mi = &_f->insts.data[i];
+      if (mi->tkind != A64TargetKindLabel)
+        continue;
+      i64 d = (i64)lab[mi->target] - (i64)offs[i];
+      i64 range = A64BranchRange((A64Op)mi->op);
+      if (d >= -range && d < range)
+        continue;
+      if (!IsCondBranch(mi->op))
+        NcFatal("branch from %s+%u is out of range", _f->name, offs[i]);
+      fix = (i32)i;
     }
+    NcXfree(offs);
+    NcXfree(lab);
+    if (fix < 0)
+      return;
+
+    MirInst orig = _f->insts.data[fix];
+    u32 skip = _f->nlabels++;
+    MirInst inv = orig;
+    inv.op = InvertBranch(orig.op);
+    if (orig.op == A64OpBcc)
+      inv.shift = A64CondInvert((A64Cond)orig.shift);
+    inv.target = skip;
+    MirInst far = {.op = A64OpB, .tkind = A64TargetKindLabel, .target = orig.target, .line = orig.line};
+    MirInst lbl = {.op = A64OpPseudoLabel, .target = skip, .line = orig.line};
+    VEC_RESERVE(&_f->insts, _f->insts.len + 2);
+    memmove(&_f->insts.data[fix + 3], &_f->insts.data[fix + 1], sizeof(MirInst) * (_f->insts.len - (u32)fix - 1));
+    _f->insts.data[fix] = inv;
+    _f->insts.data[fix + 1] = far;
+    _f->insts.data[fix + 2] = lbl;
+    _f->insts.len += 2;
+  }
 }
 
 /* ---- function emission -------------------------------------------------- */
 
-void a64m_emit_function(A64Module *m, MFunc *f) {
-    FramePlan plan;
-    frame_plan(&f->frame, &plan);
-    relax_branches(&plan, f);
+void A64ModuleEmitFunction(A64Module* _m, MirFunc* _f)
+{
+  FramePlan plan;
+  FramePlanBuild(&_f->frame, &plan);
+  RelaxBranches(&plan, _f);
 
-    /* Expand pseudos. */
-    MInstVec fin = {};
-    VEC(u32) epilogs = {};
-    u32 pos = 0;
-    MInst seq[FRAME_MAX_STEPS + 1];
-    for (u32 i = 0; i < f->insts.len; i++) {
-        MInst mi = f->insts.data[i];
-        if (mi.op == A64_P_PROLOGUE || mi.op == A64_P_EPILOGUE) {
-            NC_ASSERT(mi.op != A64_P_PROLOGUE || pos == 0);
-            if (mi.op == A64_P_EPILOGUE) vec_push(&epilogs, pos);
-            u32 n = mi.op == A64_P_PROLOGUE ? frame_prologue(&plan, seq, m->chkstk_sym)
-                                            : frame_epilogue(&plan, seq);
-            for (u32 k = 0; k < n; k++) {
-                seq[k].line = mi.line;
-                vec_push(&fin, seq[k]);
-            }
-            pos += 4 * n;
-        } else {
-            vec_push(&fin, mi);
-            if (mi.op != A64_P_LABEL) pos += 4;
-        }
+  /* Expand pseudos. */
+  MirInstVec fin = {};
+  VEC(u32) epilogs = {};
+  u32 pos = 0;
+  MirInst seq[FRAME_MAX_STEPS + 1];
+  for (u32 i = 0; i < _f->insts.len; i++)
+  {
+    MirInst mi = _f->insts.data[i];
+    if (mi.op == A64OpPseudoPrologue || mi.op == A64OpPseudoEpilogue)
+    {
+      NC_ASSERT(mi.op != A64OpPseudoPrologue || pos == 0);
+      if (mi.op == A64OpPseudoEpilogue)
+        VEC_PUSH(&epilogs, pos);
+      u32 n = mi.op == A64OpPseudoPrologue ? FramePrologue(&plan, seq, _m->chkstkSym) : FrameEpilogue(&plan, seq);
+      for (u32 k = 0; k < n; k++)
+      {
+        seq[k].line = mi.line;
+        VEC_PUSH(&fin, seq[k]);
+      }
+      pos += 4 * n;
     }
-    u32 func_bytes = pos;
-
-    /* Label offsets. */
-    u32 *lab = nc_xrealloc(nullptr, sizeof(u32) * (f->nlabels + 1));
-    for (u32 i = 0, p = 0; i < fin.len; i++) {
-        if (fin.data[i].op == A64_P_LABEL) lab[fin.data[i].target] = p;
-        else p += 4;
+    else
+    {
+      VEC_PUSH(&fin, mi);
+      if (mi.op != A64OpPseudoLabel)
+        pos += 4;
     }
+  }
+  u32 funcBytes = pos;
 
-    /* Encode. */
-    CoffSec text = coff_add_section(&m->obj, ".text$mn",
-                                    IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ,
-                                    4);
-    coff_set_comdat(&m->obj, text, IMAGE_COMDAT_SELECT_NODUPLICATES, 0);
-    u32 fsym = a64m_sym(m, f->name);
-    CoffSym fcoff = m->sym_coff.data[fsym];
-    coff_define(&m->obj, fcoff, text, 0, IMAGE_SYM_DTYPE_FUNCTION,
-                f->is_static ? IMAGE_SYM_CLASS_STATIC : IMAGE_SYM_CLASS_EXTERNAL);
-    Buf *code = &coff_section(&m->obj, text)->data;
+  /* Label offsets. */
+  u32* lab = NcXrealloc(nullptr, sizeof(u32) * (_f->nlabels + 1));
+  for (u32 i = 0, p = 0; i < fin.len; i++)
+  {
+    if (fin.data[i].op == A64OpPseudoLabel)
+      lab[fin.data[i].target] = p;
+    else
+      p += 4;
+  }
 
-    VEC(CvLine) lines = {};
-    listing_printf(m, "\n%s:%s\n", f->name, f->is_static ? "  // static" : "");
-    char text_buf[256];
-    for (u32 i = 0, p = 0; i < fin.len; i++) {
-        MInst *mi = &fin.data[i];
-        if (mi->op == A64_P_LABEL) {
-            listing_printf(m, ".L%u:\n", mi->target);
-            continue;
-        }
-        i64 pcrel = 0;
-        if (mi->tkind == TK_LABEL) pcrel = (i64)lab[mi->target] - (i64)p;
-        else if (mi->tkind == TK_OFFSET) pcrel = mi->imm;
-        u16 rtype;
-        u32 w = a64_encode(mi, pcrel, &rtype);
-        if (mi->tkind == TK_SYM) {
-            NC_ASSERT(rtype != 0);
-            coff_add_reloc(&m->obj, text, p, m->sym_coff.data[mi->target], rtype);
-        }
-        buf_u32(code, w);
-        if (mi->line && (lines.len == 0 || vec_last(&lines)->line != mi->line))
-            vec_push(&lines, ((CvLine){p, mi->line}));
-        a64_format(text_buf, sizeof text_buf, mi, pcrel, sym_name_cb, m);
-        listing_printf(m, "  %06x  %08x   %s\n", p, w, text_buf);
-        p += 4;
+  /* Encode. */
+  CoffSec text = CoffAddSection(&_m->obj, ".text$mn", IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ, 4);
+  CoffSetComdat(&_m->obj, text, IMAGE_COMDAT_SELECT_NODUPLICATES, 0);
+  u32 fsym = A64ModuleSym(_m, _f->name);
+  CoffSym fcoff = _m->symCoff.data[fsym];
+  CoffDefine(&_m->obj, fcoff, text, 0, IMAGE_SYM_DTYPE_FUNCTION, _f->isStatic ? IMAGE_SYM_CLASS_STATIC : IMAGE_SYM_CLASS_EXTERNAL);
+  Buf* code = &CoffSectionGet(&_m->obj, text)->data;
+
+  VEC(CvLine) lines = {};
+  ListingPrintf(_m, "\n%s:%s\n", _f->name, _f->isStatic ? "  // static" : "");
+  char textBuf[256];
+  for (u32 i = 0, p = 0; i < fin.len; i++)
+  {
+    MirInst* mi = &fin.data[i];
+    if (mi->op == A64OpPseudoLabel)
+    {
+      ListingPrintf(_m, ".L%u:\n", mi->target);
+      continue;
     }
-    NC_ASSERT(code->len == func_bytes);
-
-    /* Unwind data. */
-    UnwindRecord rec;
-    unwind_build(&plan, func_bytes, epilogs.data, epilogs.len, &rec);
-    if (m->verify_unwind) {
-        char err[256];
-        if (!unwind_verify(&plan, code->data, func_bytes, epilogs.data, epilogs.len, &rec, err,
-                           sizeof err))
-            nc_fatal("internal error: unwind verification failed for %s: %s", f->name, err);
+    i64 pcrel = 0;
+    if (mi->tkind == A64TargetKindLabel)
+      pcrel = (i64)lab[mi->target] - (i64)p;
+    else if (mi->tkind == A64TargetKindOffset)
+      pcrel = mi->imm;
+    u16 rtype;
+    u32 w = A64Encode(mi, pcrel, &rtype);
+    if (mi->tkind == A64TargetKindSym)
+    {
+      NC_ASSERT(rtype != 0);
+      CoffAddReloc(&_m->obj, text, p, _m->symCoff.data[mi->target], rtype);
     }
-    m->nfuncs++;
-    if (!rec.none) {
-        /* Note: adding a section may reallocate the section table, so section
+    BufU32(code, w);
+    if (mi->line && (lines.len == 0 || VEC_LAST(&lines)->line != mi->line))
+      VEC_PUSH(&lines, ((CvLine){p, mi->line}));
+    A64Format(textBuf, sizeof textBuf, mi, pcrel, SymNameCb, _m);
+    ListingPrintf(_m, "  %06x  %08x   %s\n", p, w, textBuf);
+    p += 4;
+  }
+  NC_ASSERT(code->len == funcBytes);
+
+  /* Unwind data. */
+  UnwindRecord rec;
+  UnwindBuild(&plan, funcBytes, epilogs.data, epilogs.len, &rec);
+  if (_m->verifyUnwind)
+  {
+    char err[256];
+    if (!UnwindVerify(&plan, code->data, funcBytes, epilogs.data, epilogs.len, &rec, err, sizeof err))
+      NcFatal("internal error: unwind verification failed for %s: %s", _f->name, err);
+  }
+  _m->nfuncs++;
+  if (!rec.none)
+  {
+    /* Note: adding a section may reallocate the section table, so section
          * buffers are only looked up after all sections exist. */
-        CoffSec pdata = coff_add_section(&m->obj, ".pdata",
-                                         IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ, 4);
-        coff_set_comdat(&m->obj, pdata, IMAGE_COMDAT_SELECT_ASSOCIATIVE, text);
-        coff_add_reloc(&m->obj, pdata, 0, fcoff, IMAGE_REL_ARM64_ADDR32NB);
-        u32 second = 0;
-        if (rec.packed) {
-            second = rec.packed_word;
-            m->npacked++;
-            listing_printf(m, "  // unwind: packed %08x\n", rec.packed_word);
-        } else {
-            CoffSec xdata = coff_add_section(
-                &m->obj, ".xdata", IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ, 4);
-            coff_set_comdat(&m->obj, xdata, IMAGE_COMDAT_SELECT_ASSOCIATIVE, text);
-            buf_bytes(&coff_section(&m->obj, xdata)->data, rec.xdata.data, rec.xdata.len);
-            char *uname = arena_printf(m->arena, "$unwind$%s", f->name);
-            CoffSym usym =
-                coff_add_symbol(&m->obj, uname, (i32)xdata, 0, 0, IMAGE_SYM_CLASS_STATIC);
-            coff_add_reloc(&m->obj, pdata, 4, usym, IMAGE_REL_ARM64_ADDR32NB);
-            m->nxdata++;
-            listing_printf(m, "  // unwind: xdata, %u bytes, %u epilogue(s)\n", rec.xdata.len,
-                           epilogs.len);
-        }
-        Buf *pd = &coff_section(&m->obj, pdata)->data;
-        buf_u32(pd, 0);
-        buf_u32(pd, second);
-    } else {
-        listing_printf(m, "  // unwind: none (frameless leaf)\n");
+    CoffSec pdata = CoffAddSection(&_m->obj, ".pdata", IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ, 4);
+    CoffSetComdat(&_m->obj, pdata, IMAGE_COMDAT_SELECT_ASSOCIATIVE, text);
+    CoffAddReloc(&_m->obj, pdata, 0, fcoff, IMAGE_REL_ARM64_ADDR32NB);
+    u32 second = 0;
+    if (rec.packed)
+    {
+      second = rec.packedWord;
+      _m->npacked++;
+      ListingPrintf(_m, "  // unwind: packed %08x\n", rec.packedWord);
     }
-
-    if (m->debug) {
-        CvFunc cf = {
-            .name = f->name, .is_static = f->is_static, .text = text, .sym = fcoff,
-            .length = func_bytes, .prolog_end = 4 * frame_prologue_len(&plan),
-            .epilog_start = epilogs.len ? epilogs.data[0] : func_bytes,
-            .frame_size = plan.frame_size, .saved_regs_size = plan.save_size,
-            .lines = lines.data, .nlines = lines.len,
-        };
-        cv_emit_function(&m->cv, &m->obj, &cf);
+    else
+    {
+      CoffSec xdata = CoffAddSection(&_m->obj, ".xdata", IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ, 4);
+      CoffSetComdat(&_m->obj, xdata, IMAGE_COMDAT_SELECT_ASSOCIATIVE, text);
+      BufBytes(&CoffSectionGet(&_m->obj, xdata)->data, rec.xdata.data, rec.xdata.len);
+      char* uname = ArenaPrintf(_m->arena, "$unwind$%s", _f->name);
+      CoffSym usym = CoffAddSymbol(&_m->obj, uname, (i32)xdata, 0, 0, IMAGE_SYM_CLASS_STATIC);
+      CoffAddReloc(&_m->obj, pdata, 4, usym, IMAGE_REL_ARM64_ADDR32NB);
+      _m->nxdata++;
+      ListingPrintf(_m, "  // unwind: xdata, %u bytes, %u epilogue(s)\n", rec.xdata.len, epilogs.len);
     }
+    Buf* pd = &CoffSectionGet(&_m->obj, pdata)->data;
+    BufU32(pd, 0);
+    BufU32(pd, second);
+  }
+  else
+  {
+    ListingPrintf(_m, "  // unwind: none (frameless leaf)\n");
+  }
 
-    unwind_record_free(&rec);
-    vec_free(&lines);
-    vec_free(&epilogs);
-    vec_free(&fin);
-    nc_xfree(lab);
+  if (_m->debug)
+  {
+    CvFunc cf = {
+      .name = _f->name,
+      .isStatic = _f->isStatic,
+      .text = text,
+      .sym = fcoff,
+      .length = funcBytes,
+      .prologEnd = 4 * FramePrologueLen(&plan),
+      .epilogStart = epilogs.len ? epilogs.data[0] : funcBytes,
+      .frameSize = plan.frameSize,
+      .savedRegsSize = plan.saveSize,
+      .lines = lines.data,
+      .nlines = lines.len,
+    };
+    CvEmitFunction(&_m->cv, &_m->obj, &cf);
+  }
+
+  UnwindRecordFree(&rec);
+  VEC_FREE(&lines);
+  VEC_FREE(&epilogs);
+  VEC_FREE(&fin);
+  NcXfree(lab);
 }
 
 /* ---- data --------------------------------------------------------------- */
 
-void a64m_emit_data(A64Module *m, const char *name, bool is_static, A64DataKind kind,
-                    const void *init, u32 size, u32 align, const A64DataReloc *relocs,
-                    u32 nrelocs) {
-    static const char *const names[] = {".data", ".rdata", ".bss", ".tls$"};
-    u32 ch = IMAGE_SCN_MEM_READ;
-    switch (kind) {
-    case DATA_RW: ch |= IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_WRITE; break;
-    case DATA_RO: ch |= IMAGE_SCN_CNT_INITIALIZED_DATA; break;
-    case DATA_BSS: ch |= IMAGE_SCN_CNT_UNINITIALIZED_DATA | IMAGE_SCN_MEM_WRITE; break;
-    case DATA_TLS: ch |= IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_WRITE; break;
-    }
-    CoffSec s = coff_add_section(&m->obj, names[kind], ch, align);
-    /* One section per object (/Gw, Q-18) so /OPT:REF can drop unused data. */
-    coff_set_comdat(&m->obj, s, IMAGE_COMDAT_SELECT_NODUPLICATES, 0);
-    CoffSection *sec = coff_section(&m->obj, s);
-    if (kind == DATA_BSS) {
-        NC_ASSERT(!init && !nrelocs);
-        sec->bss_size = size;
-    } else if (init) {
-        buf_bytes(&sec->data, init, size);
-    } else {
-        buf_zeros(&sec->data, size);
-    }
-    u32 sym = a64m_sym(m, name);
-    coff_define(&m->obj, m->sym_coff.data[sym], s, 0, 0,
-                is_static ? IMAGE_SYM_CLASS_STATIC : IMAGE_SYM_CLASS_EXTERNAL);
-    for (u32 i = 0; i < nrelocs; i++) {
-        NC_ASSERT(relocs[i].offset + 8 <= size);
-        coff_add_reloc(&m->obj, s, relocs[i].offset, m->sym_coff.data[relocs[i].sym],
-                       IMAGE_REL_ARM64_ADDR64);
-    }
-    listing_printf(m, "\n%s:  // %s, %u bytes, align %u\n", name, names[kind], size, align);
+void A64ModuleEmitData(A64Module* _m, const char* _name, bool _isStatic, A64DataKind _kind, const void* _init, u32 _size, u32 _align,
+                       const A64DataReloc* _relocs, u32 _nrelocs)
+{
+  static const char* const NAMES[] = {".data", ".rdata", ".bss", ".tls$"};
+  u32 ch = IMAGE_SCN_MEM_READ;
+  switch (_kind)
+  {
+  case A64DataKindRw:
+    ch |= IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_WRITE;
+    break;
+  case A64DataKindRo:
+    ch |= IMAGE_SCN_CNT_INITIALIZED_DATA;
+    break;
+  case A64DataKindBss:
+    ch |= IMAGE_SCN_CNT_UNINITIALIZED_DATA | IMAGE_SCN_MEM_WRITE;
+    break;
+  case A64DataKindTls:
+    ch |= IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_WRITE;
+    break;
+  }
+  CoffSec s = CoffAddSection(&_m->obj, NAMES[_kind], ch, _align);
+  /* One section per object (/Gw, Q-18) so /OPT:REF can drop unused data. */
+  CoffSetComdat(&_m->obj, s, IMAGE_COMDAT_SELECT_NODUPLICATES, 0);
+  CoffSection* sec = CoffSectionGet(&_m->obj, s);
+  if (_kind == A64DataKindBss)
+  {
+    NC_ASSERT(!_init && !_nrelocs);
+    sec->bssSize = _size;
+  }
+  else if (_init)
+  {
+    BufBytes(&sec->data, _init, _size);
+  }
+  else
+  {
+    BufZeros(&sec->data, _size);
+  }
+  u32 sym = A64ModuleSym(_m, _name);
+  CoffDefine(&_m->obj, _m->symCoff.data[sym], s, 0, 0, _isStatic ? IMAGE_SYM_CLASS_STATIC : IMAGE_SYM_CLASS_EXTERNAL);
+  for (u32 i = 0; i < _nrelocs; i++)
+  {
+    NC_ASSERT(_relocs[i].offset + 8 <= _size);
+    CoffAddReloc(&_m->obj, s, _relocs[i].offset, _m->symCoff.data[_relocs[i].sym], IMAGE_REL_ARM64_ADDR64);
+  }
+  ListingPrintf(_m, "\n%s:  // %s, %u bytes, align %u\n", _name, NAMES[_kind], _size, _align);
 }
 
-void a64m_finish(A64Module *m, Buf *out) {
-    if (m->debug) cv_finish(&m->cv, &m->obj);
-    coff_serialize(&m->obj, out);
+void A64ModuleFinish(A64Module* _m, Buf* _out)
+{
+  if (_m->debug)
+    CvFinish(&_m->cv, &_m->obj);
+  CoffSerialize(&_m->obj, _out);
 }
 
 /* ---- builder helpers ---------------------------------------------------- */
 
-void mf_init(MFunc *f, const char *name, bool is_static, FrameDesc frame) {
-    memset(f, 0, sizeof *f);
-    f->name = name;
-    f->is_static = is_static;
-    f->frame = frame;
+void MirFuncInit(MirFunc* _f, const char* _name, bool _isStatic, FrameDesc _frame)
+{
+  memset(_f, 0, sizeof *_f);
+  _f->name = _name;
+  _f->isStatic = _isStatic;
+  _f->frame = _frame;
 }
 
-void mf_free(MFunc *f) { vec_free(&f->insts); }
-
-u32 mf_new_label(MFunc *f) { return f->nlabels++; }
-
-void mf_emit(MFunc *f, MInst mi) {
-    if (!mi.line) mi.line = f->cur_line;
-    vec_push(&f->insts, mi);
+void MirFuncFree(MirFunc* _f)
+{
+  VEC_FREE(&_f->insts);
 }
 
-void mf_label(MFunc *f, u32 label) {
-    mf_emit(f, (MInst){.op = A64_P_LABEL, .target = label});
+u32 MirFuncNewLabel(MirFunc* _f)
+{
+  return _f->nlabels++;
 }
 
-void mf_line(MFunc *f, u32 line) { f->cur_line = line; }
+void MirFuncEmit(MirFunc* _f, MirInst _mi)
+{
+  if (!_mi.line)
+    _mi.line = _f->curLine;
+  VEC_PUSH(&_f->insts, _mi);
+}
 
-void mf_mov_imm(MFunc *f, u32 rd, u64 value, bool w) {
-    u32 width = w ? 32 : 64, chunks = width / 16, zeros = 0, ones = 0;
-    if (w) value &= 0xFFFFFFFFu;
-    for (u32 i = 0; i < chunks; i++) {
-        u32 c = (u32)(value >> (16 * i)) & 0xFFFF;
-        zeros += c == 0;
-        ones += c == 0xFFFF;
+void MirFuncLabel(MirFunc* _f, u32 _label)
+{
+  MirFuncEmit(_f, (MirInst){.op = A64OpPseudoLabel, .target = _label});
+}
+
+void MirFuncLine(MirFunc* _f, u32 _line)
+{
+  _f->curLine = _line;
+}
+
+void MirFuncMovImm(MirFunc* _f, u32 _rd, u64 _value, bool _w)
+{
+  u32 width = _w ? 32 : 64, chunks = width / 16, zeros = 0, ones = 0;
+  if (_w)
+    _value &= 0xFFFFFFFFu;
+  for (u32 i = 0; i < chunks; i++)
+  {
+    u32 c = (u32)(_value >> (16 * i)) & 0xFFFF;
+    zeros += c == 0;
+    ones += c == 0xFFFF;
+  }
+  bool inverted = ones > zeros;
+  u32 fill = inverted ? 0xFFFF : 0;
+  u32 needed = chunks - (inverted ? ones : zeros); /* chunks that need an instruction */
+  u32 n, immr, imms;
+  if (needed > 1 && A64EncodeLogicalImm(_value, width, &n, &immr, &imms))
+  {
+    MirFuncEmit(_f, (MirInst){.op = _w ? A64OpORRWri : A64OpORRXri, .rd = (u8)_rd, .rn = A64_ZR, .imm = (i64)_value});
+    return;
+  }
+  bool first = true;
+  for (u32 i = 0; i < chunks; i++)
+  {
+    u32 c = (u32)(_value >> (16 * i)) & 0xFFFF;
+    bool lastChance = first && i == chunks - 1; /* every chunk equals the fill */
+    if (c == fill && !lastChance)
+      continue;
+    if (first)
+    {
+      A64Op op = inverted ? (_w ? A64OpMOVNW : A64OpMOVNX) : (_w ? A64OpMOVZW : A64OpMOVZX);
+      u32 imm16 = inverted ? (~c & 0xFFFF) : c;
+      u32 sh = lastChance && c == fill ? 0 : 16 * i;
+      MirFuncEmit(_f, (MirInst){.op = op, .rd = (u8)_rd, .imm = imm16, .amount = (u8)sh});
+      first = false;
     }
-    bool inverted = ones > zeros;
-    u32 fill = inverted ? 0xFFFF : 0;
-    u32 needed = chunks - (inverted ? ones : zeros); /* chunks that need an instruction */
-    u32 n, immr, imms;
-    if (needed > 1 && a64_encode_logical_imm(value, width, &n, &immr, &imms)) {
-        mf_emit(f, (MInst){.op = w ? A64_ORRWri : A64_ORRXri, .rd = (u8)rd, .rn = A64_ZR,
-                           .imm = (i64)value});
-        return;
+    else
+    {
+      MirFuncEmit(_f, (MirInst){.op = _w ? A64OpMOVKW : A64OpMOVKX, .rd = (u8)_rd, .imm = c, .amount = (u8)(16 * i)});
     }
-    bool first = true;
-    for (u32 i = 0; i < chunks; i++) {
-        u32 c = (u32)(value >> (16 * i)) & 0xFFFF;
-        bool last_chance = first && i == chunks - 1; /* every chunk equals the fill */
-        if (c == fill && !last_chance) continue;
-        if (first) {
-            A64Op op = inverted ? (w ? A64_MOVNW : A64_MOVNX) : (w ? A64_MOVZW : A64_MOVZX);
-            u32 imm16 = inverted ? (~c & 0xFFFF) : c;
-            u32 sh = last_chance && c == fill ? 0 : 16 * i;
-            mf_emit(f, (MInst){.op = op, .rd = (u8)rd, .imm = imm16, .amount = (u8)sh});
-            first = false;
-        } else {
-            mf_emit(f, (MInst){.op = w ? A64_MOVKW : A64_MOVKX, .rd = (u8)rd, .imm = c,
-                               .amount = (u8)(16 * i)});
-        }
-    }
+  }
 }

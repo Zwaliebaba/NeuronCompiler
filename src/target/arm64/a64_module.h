@@ -10,61 +10,68 @@
 #include "a64.h"
 #include "unwind.h"
 
-typedef VEC(MInst) MInstVec;
+typedef VEC(MirInst) MirInstVec;
 
-typedef struct MFunc {
-    const char *name;
-    bool is_static;
-    FrameDesc frame;
-    MInstVec insts; /* body, with P_PROLOGUE / P_EPILOGUE / P_LABEL pseudos */
-    u32 nlabels;
-    u32 cur_line;   /* line number stamped on instructions added by builders */
-} MFunc;
+typedef struct MirFunc
+{
+  const char* name;
+  bool isStatic;
+  FrameDesc frame;
+  MirInstVec insts; /* body, with P_PROLOGUE / P_EPILOGUE / P_LABEL pseudos */
+  u32 nlabels;
+  u32 curLine; /* line number stamped on instructions added by builders */
+} MirFunc;
 
-typedef enum A64DataKind : u8 { DATA_RW, DATA_RO, DATA_BSS, DATA_TLS } A64DataKind;
+typedef enum A64DataKind : u8
+{
+  A64DataKindRw,
+  A64DataKindRo,
+  A64DataKindBss,
+  A64DataKindTls
+} A64DataKind;
 
-typedef struct A64DataReloc {
-    u32 offset; /* byte offset within the object */
-    u32 sym;    /* module symbol whose address is stored (ADDR64) */
+typedef struct A64DataReloc
+{
+  u32 offset; /* byte offset within the object */
+  u32 sym;    /* module symbol whose address is stored (ADDR64) */
 } A64DataReloc;
 
-typedef struct A64Module {
-    Arena *arena;
-    CoffObj obj;
-    CvModule cv;
-    bool debug;
-    bool verify_unwind;
-    VEC(const char *) sym_names;
-    VEC(CoffSym) sym_coff;
-    u32 chkstk_sym;
-    Buf listing; /* -S style listing of everything emitted */
-    u32 nfuncs, npacked, nxdata;
+typedef struct A64Module
+{
+  Arena* arena;
+  CoffObj obj;
+  CvModule cv;
+  bool debug;
+  bool verifyUnwind;
+  VEC(const char*) symNames;
+  VEC(CoffSym) symCoff;
+  u32 chkstkSym;
+  Buf listing; /* -S style listing of everything emitted */
+  u32 nfuncs, npacked, nxdata;
 } A64Module;
 
-void a64m_init(A64Module *m, Arena *arena, const char *obj_name, const char *source_name,
-               bool debug);
-void a64m_free(A64Module *m);
+void A64ModuleInit(A64Module* _m, Arena* _arena, const char* _objName, const char* _sourceName, bool _debug);
+void A64ModuleFree(A64Module* _m);
 
 /* Returns the module symbol id for `name`, creating an undefined external. */
-u32 a64m_sym(A64Module *m, const char *name);
+u32 A64ModuleSym(A64Module* _m, const char* _name);
 
-void a64m_emit_function(A64Module *m, MFunc *f);
-void a64m_emit_data(A64Module *m, const char *name, bool is_static, A64DataKind kind,
-                    const void *init, u32 size, u32 align, const A64DataReloc *relocs,
-                    u32 nrelocs);
-void a64m_directive(A64Module *m, const char *directive);
-void a64m_finish(A64Module *m, Buf *out);
+void A64ModuleEmitFunction(A64Module* _m, MirFunc* _f);
+void A64ModuleEmitData(A64Module* _m, const char* _name, bool _isStatic, A64DataKind _kind, const void* _init, u32 _size, u32 _align,
+                       const A64DataReloc* _relocs, u32 _nrelocs);
+void A64ModuleDirective(A64Module* _m, const char* _directive);
+void A64ModuleFinish(A64Module* _m, Buf* _out);
 
 /* ---- builder helpers ---------------------------------------------------- */
 
-void mf_init(MFunc *f, const char *name, bool is_static, FrameDesc frame);
-void mf_free(MFunc *f);
-u32  mf_new_label(MFunc *f);
-void mf_emit(MFunc *f, MInst mi);
-void mf_label(MFunc *f, u32 label);
-void mf_line(MFunc *f, u32 line);
+void MirFuncInit(MirFunc* _f, const char* _name, bool _isStatic, FrameDesc _frame);
+void MirFuncFree(MirFunc* _f);
+u32 MirFuncNewLabel(MirFunc* _f);
+void MirFuncEmit(MirFunc* _f, MirInst _mi);
+void MirFuncLabel(MirFunc* _f, u32 _label);
+void MirFuncLine(MirFunc* _f, u32 _line);
 /* Materialises a 64-bit (or 32-bit, if `w`) constant with the shortest
  * movz/movn/movk or orr-immediate sequence. */
-void mf_mov_imm(MFunc *f, u32 rd, u64 value, bool w);
+void MirFuncMovImm(MirFunc* _f, u32 _rd, u64 _value, bool _w);
 
 #endif

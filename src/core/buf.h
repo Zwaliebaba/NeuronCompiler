@@ -5,44 +5,65 @@
 
 #include "core.h"
 
-typedef struct Buf {
-    u8 *data;
-    u32 len;
-    u32 cap;
+typedef struct Buf
+{
+  u8* data;
+  u32 len;
+  u32 cap;
 } Buf;
 
-void buf_free(Buf *b);
-void buf_reserve(Buf *b, u32 need);
-void buf_bytes(Buf *b, const void *p, u32 n);
-void buf_zeros(Buf *b, u32 n);
-void buf_align(Buf *b, u32 align, u8 fill);
-void buf_str0(Buf *b, const char *s); /* string including NUL */
+void BufFree(Buf* _b);
+void BufReserve(Buf* _b, u32 _need);
+void BufBytes(Buf* _b, const void* _p, u32 _n);
+void BufZeros(Buf* _b, u32 _n);
+void BufAlign(Buf* _b, u32 _align, u8 _fill);
+void BufStr0(Buf* _b, const char* _s); /* string including NUL */
 
-static inline void buf_u8(Buf *b, u8 v) { buf_bytes(b, &v, 1); }
-static inline void buf_u16(Buf *b, u16 v) { u8 t[2] = {(u8)v, (u8)(v >> 8)}; buf_bytes(b, t, 2); }
-static inline void buf_u32(Buf *b, u32 v) {
-    u8 t[4] = {(u8)v, (u8)(v >> 8), (u8)(v >> 16), (u8)(v >> 24)};
-    buf_bytes(b, t, 4);
+static inline void BufU8(Buf* _b, u8 _v)
+{
+  BufBytes(_b, &_v, 1);
 }
-static inline void buf_u64(Buf *b, u64 v) { buf_u32(b, (u32)v); buf_u32(b, (u32)(v >> 32)); }
-
-static inline void buf_put_u16(Buf *b, u32 at, u16 v) {
-    NC_ASSERT(at + 2 <= b->len);
-    b->data[at] = (u8)v; b->data[at + 1] = (u8)(v >> 8);
+static inline void BufU16(Buf* _b, u16 _v)
+{
+  u8 t[2] = {(u8)_v, (u8)(_v >> 8)};
+  BufBytes(_b, t, 2);
 }
-static inline void buf_put_u32(Buf *b, u32 at, u32 v) {
-    NC_ASSERT(at + 4 <= b->len);
-    for (int i = 0; i < 4; i++) b->data[at + i] = (u8)(v >> (8 * i));
+static inline void BufU32(Buf* _b, u32 _v)
+{
+  u8 t[4] = {(u8)_v, (u8)(_v >> 8), (u8)(_v >> 16), (u8)(_v >> 24)};
+  BufBytes(_b, t, 4);
 }
-static inline u32 buf_get_u32(const Buf *b, u32 at) {
-    NC_ASSERT(at + 4 <= b->len);
-    return (u32)b->data[at] | (u32)b->data[at + 1] << 8 | (u32)b->data[at + 2] << 16 |
-           (u32)b->data[at + 3] << 24;
+static inline void BufU64(Buf* _b, u64 _v)
+{
+  BufU32(_b, (u32)_v);
+  BufU32(_b, (u32)(_v >> 32));
 }
 
-static inline u32 rd_u32(const u8 *p) {
-    return (u32)p[0] | (u32)p[1] << 8 | (u32)p[2] << 16 | (u32)p[3] << 24;
+static inline void BufPutU16(Buf* _b, u32 _at, u16 _v)
+{
+  NC_ASSERT(_at + 2 <= _b->len);
+  _b->data[_at] = (u8)_v;
+  _b->data[_at + 1] = (u8)(_v >> 8);
 }
-static inline u16 rd_u16(const u8 *p) { return (u16)(p[0] | p[1] << 8); }
+static inline void BufPutU32(Buf* _b, u32 _at, u32 _v)
+{
+  NC_ASSERT(_at + 4 <= _b->len);
+  for (int i = 0; i < 4; i++)
+    _b->data[_at + i] = (u8)(_v >> (8 * i));
+}
+static inline u32 BufGetU32(const Buf* _b, u32 _at)
+{
+  NC_ASSERT(_at + 4 <= _b->len);
+  return (u32)_b->data[_at] | (u32)_b->data[_at + 1] << 8 | (u32)_b->data[_at + 2] << 16 | (u32)_b->data[_at + 3] << 24;
+}
+
+static inline u32 BufReadU32(const u8* _p)
+{
+  return (u32)_p[0] | (u32)_p[1] << 8 | (u32)_p[2] << 16 | (u32)_p[3] << 24;
+}
+static inline u16 BufReadU16(const u8* _p)
+{
+  return (u16)(_p[0] | _p[1] << 8);
+}
 
 #endif

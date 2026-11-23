@@ -6,7 +6,7 @@ This repository is **NeuronCompiler** (`ncc`): a self-hosting C23 compiler, writ
 
 **Where these rules come from.** The naming and layout conventions are carried over from two sibling repositories, `Outpost.Warzone`, where the formatter and linter settings were measured against roughly 223,000 lines, and `Nomad-Commander`. Those trees are C++ and this one is C, so every rule here has been restated for C: the C++-only parts (namespaces, classes, access control, templates, RAII) are gone, and where C forces a different answer — enumerators share one namespace, a constant is an anonymous enum, a struct field has no access specifier — the rule says so. **What did not come across is the other trees' design, their decisions or their plan.** A decision taken there binds nothing here.
 
-**The tree is not yet conformant.** Phase 0 (the back-end tail: encoder, COFF writer, unwind, minimal CodeView) was written before these files arrived, in a different style. §8 says what that means, what the plan is and what to do in the meantime. Everything else in this file describes code as it must be written.
+**The tree is conformant, and CI keeps it so.** Phase 0 (the back-end tail: encoder, COFF writer, unwind, minimal CodeView) was written before these files arrived, in a different style, and was converted in one change; §8 records what that took and what it left open.
 
 **What is authoritative, in order:**
 
@@ -157,11 +157,11 @@ void ArenaInit(Arena* _arena, ArenaLifetime _lifetime)
 
 | Rule | Enforced by |
 |---|---|
-| The naming table, R1, R3, R5, R8 | [`.clang-tidy`](.clang-tidy) — `make tidy`, to be gated in CI over `src/` and `tests/` |
-| R2 affixes, R7 file and directory names, R11 spellings, the enumerator shape (named vs anonymous), build and test registration (§2) | the tree checker, `make check-tree`, to be gated in CI |
+| The naming table, R1, R3, R5, R8 | [`.clang-tidy`](.clang-tidy) — `make tidy`, gated in CI over `src/` and `tests/` |
+| R2 affixes, R7 file and directory names, R11 spellings, the enumerator shape (named vs anonymous), build and test registration (§2) | the tree checker, `make check-tree`, gated in CI |
 | R4, R6, R9, R10 | Review. Check your own diff against the table before handing it back. |
 
-**None of the three gates exists yet** (§6, §8). `.clang-tidy` is configured and verified against clang-tidy 22.1.8, but nothing runs it in CI, and the Makefile has no `tidy`, `check-format` or `check-tree` target. Until each lands, the rules in its row are review's problem and nothing else. A rule nobody can run is a rule that rots, so writing them is early work rather than housekeeping.
+**All three gates run in CI** (§6), on the Linux Clang leg; `check-tree` runs on the GCC leg as well. The rules in the last row are review's problem and nothing else.
 
 ---
 
@@ -195,7 +195,7 @@ The layout is the design's ([Design/02-architecture.md](Design/02-architecture.m
 
 **Build with both compilers before you claim anything.** CI builds and tests with each, and the roadmap holds the tree to *byte-identical output from GCC-built and Clang-built tools*. A change that passes under one compiler and was never built with the other is half verified, and the report says which half.
 
-**The Makefile and `build.cmd` agree by rule, not by luck.** They state the same standard and the same warnings. The only sanctioned difference is what the host forces — `-D_CRT_SECURE_NO_WARNINGS`, because the UCRT deprecates the ISO functions the tree uses. (At the time of writing `build.cmd` lacks `-Wshadow`: that is a defect to fix, not a second sanctioned difference.) CI never runs `build.cmd`, so the two drifting apart is found only by whoever next builds on Windows.
+**The Makefile and `build.cmd` agree by rule, not by luck.** They state the same standard and the same warnings. The only sanctioned difference is what the host forces — `-D_CRT_SECURE_NO_WARNINGS`, because the UCRT deprecates the ISO functions the tree uses. CI never runs `build.cmd`, so the two drifting apart is found only by whoever next builds on Windows.
 
 ```sh
 # Linux or macOS, from the repository root.
@@ -217,9 +217,9 @@ tests\windows\p0-accept.cmd
 
 **A skipped test is not a passed test.** A unit test that needs a missing tool (`llvm-mc`, say) reports itself as skipped and the run still exits 0; `make test-link` exits 0 with `link test SKIPPED` if any of the LLVM tools it needs is absent. Read the output. CI installs every tool, so a skip in CI is a CI defect; a skip on your machine goes in your report as a skip.
 
-**A green Linux run says nothing about whether `link.exe` accepts the object or Windows can unwind through it.** `lld-link`, `llvm-readobj`, `llvm-pdbutil` and our own unwinder are independent cross-checks, not the target. For anything touching object emission, relocations, unwind data, CodeView or the generated code, run `make test-link`, and where you can, `tests/windows/p0-accept.cmd` on Windows on Arm — it links with `link.exe`, runs the programs and checks every function against `RtlVirtualUnwind`. That acceptance is not in CI (§6). Say which of the two you ran.
+**A green Linux run says nothing about whether `link.exe` accepts the object or Windows can unwind through it.** `lld-link`, `llvm-readobj`, `llvm-pdbutil` and our own unwinder are independent cross-checks, not the target. For anything touching object emission, relocations, unwind data, CodeView or the generated code, run `make test-link`, and where you can, `tests/windows/p0-accept.cmd` on Windows on Arm — it links with `link.exe`, runs the programs and checks every function against `RtlVirtualUnwind`. CI runs that acceptance on every push and pull request, in the `windows-arm64` job (§6). Locally, say which of the two you ran; on a PR, say whether the `windows-arm64` job was green on its head.
 
-**Run the checkers before you push**, once they exist (§6): `make check-format`, `make tidy`, `make check-tree`.
+**Run the checkers before you push** (§6): `make check-format`, `make tidy`, `make check-tree`. The first two need LLVM 18.1.3 and refuse to run under another version.
 
 **Report what you actually did.** "Builds clean with Clang, not tested with GCC", "unit tests pass, link test skipped (no `lld-link`)" and "accepted on Windows on Arm" are different claims. Never imply a stronger one than you made, and say which host and which compilers.
 
@@ -229,7 +229,7 @@ tests\windows\p0-accept.cmd
 
 [`.clang-format`](.clang-format) is the authority for C layout: 2-space indent, 140 columns, Allman braces, pointer bound left (`Arena* _arena`), includes never reordered. [`.editorconfig`](.editorconfig) covers everything clang-format does not — line endings, UTF-8, final newline, trailing whitespace, the tab-indented Makefile and the other non-C formats — and repeats the two numbers an editor needs before the first save. [`.gitattributes`](.gitattributes) pins the working-tree line ending of each format so that every checkout on every host holds the same bytes: CRLF for C, the `.def` tables and the `cmd` scripts; LF for the Makefile, shell, YAML and Markdown.
 
-**The phase-0 tree is not formatted to `.clang-format` yet** (§8). Until the conversion lands, **write every new file to it, and do not run the formatter over an existing file** as part of an unrelated change: the whole-file diff buries the change it came with. After the conversion the tree is formatted, CI keeps it that way, and if the check fires you run the formatter and commit the result rather than arguing with it.
+**The tree is formatted to `.clang-format`, and CI keeps it that way** (`make check-format`). If the check fires, run the formatter on the files you touched and commit the result rather than arguing with it.
 
 - **Do not reformat what your task did not touch.** A drive-by reformat produces pure churn and buries your actual change.
 - **Include order is grouped by hand**, which is why `SortIncludes` is `Never`: in a `.c`, its own header first (R10), then other project headers, then the standard library. The own-header-first position is the header's self-containment check, and in the include-with-parameters pattern (`#define HMAP_K …` then `#include "core/hmap.inc"`) the position of an include is part of its meaning. A formatter reordering these behind a change's back is a correctness risk, not a style preference.
@@ -268,15 +268,15 @@ These are conformance rules with a design source. Each cites it; if the design c
 
 **Record decisions in `Design/`, not beside it.** An engineering decision — a file format, a subsystem's shape, an exception to a rule here — is recorded in [`Design/16-open-questions.md`](Design/16-open-questions.md) under the next free `Q-` number, with its consequence and the documents it touched, and the affected numbered document is updated **in the same commit** as the change that implements it. A question you cannot settle goes into the *Open* table rather than into the code as an assumption. Figures in the design are measured, not estimated — if you quote one, say how you measured it. A decision nobody wrote down gets re-litigated every few months by whoever forgot it.
 
-**Write the checkers early.** Three gates are missing, and each is a Makefile target, so that no tool beyond the ones CI already installs is needed:
+**The checkers.** Three gates, each a Makefile target, so that no tool beyond the ones CI already installs is needed:
 
 - `make check-format` — `clang-format --dry-run --Werror` over every tracked `.c` and `.h`, pinned to clang-format 18.1.3, the version ubuntu-24.04 installs.
-- `make tidy` — clang-tidy over every `.c` under `src/` and `tests/`, once for the host and once for Windows ARM64 against the mingw-w64 headers (the way `check-windows` compiles), so the `_WIN32` half of the OS layer is linted too. The version is pinned when the gate is wired.
+- `make tidy` — clang-tidy over every `.c` under `src/` and `tests/`, once for the host and once for Windows ARM64 against the mingw-w64 headers (the way `check-windows` compiles), so the `_WIN32` half of the OS layer is linted too, pinned to clang-tidy 18.1.3 (Q-28).
 - `make check-tree` — R2's banned affixes, R7's file and directory names, R11's spelling families, the enumerator shape, and the two registries in §2 (a source directory missing from either build file; a test entry point missing from `test_main.c`). It is a small tool in `src/tools`, built by stage 0 like everything else, so that D-07 holds for the checker too.
 
-Until each lands, the rules it would enforce are review's problem — which is exactly why they are early work rather than housekeeping.
+A gate that fires is a defect in the code, not in the gate: fix the code. Moving the LLVM pin is a change of its own, with the tree re-measured under the new version (Q-28).
 
-**What CI runs.** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) has one Linux job on ubuntu-24.04, run once with GCC and once with Clang: build, unit tests, the link test, and — on the Clang leg — `make check-windows`, then the phase-0 objects are uploaded as an artifact for Windows acceptance. **There is no Windows job**: hosted ARM64 Windows runners are not available to a private repository without larger-runner billing, so `tests/windows/p0-accept.cmd` is run by hand, from a Windows build or from the CI artifact. Format, tidy and the tree check are not gated yet; they are wired by the conversion (§8). Nothing is `continue-on-error`, and nothing should be: a step that exists and fails fails the build.
+**What CI runs.** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) has two jobs. **`linux`** runs on ubuntu-24.04, once with GCC and once with Clang: build, unit tests and the link test. On the Clang leg it also runs `make check-windows`, `make check-format` and `make tidy`, and uploads the phase-0 objects as an artifact; both legs run `make check-tree`. **`windows-arm64`** runs natively on GitHub's hosted `windows-11-arm` runner (image `windows-11-vs2026-arm64`), which is free because the repository is public; if the repository is made private (Q-27), this job is billed against private-repository minutes. It sets up the VS 2026 ARM64 environment, builds the tools with clang and runs `tests/windows/p0-accept.cmd`: it links both demo programs with `link.exe`, runs them and compares their output, and checks every function against `RtlVirtualUnwind` with `ncc-uwcheck`. It then runs the unit tests natively. What remains manual is stepping through in the VS debugger and the `cl /Z7` comparison (Q-26). Nothing is `continue-on-error`, and nothing should be: a step that exists and fails fails the build.
 
 **Commits and PRs.** Branch off `main`; small, focused commits with an imperative subject describing the change, not the process. One change per PR. CI must be green. Never commit build output.
 
@@ -291,7 +291,7 @@ Until each lands, the rules it would enforce are review's problem — which is e
 - [ ] The Makefile and `build.cmd` still agree on everything §3 says they must.
 - [ ] The code is NC-Boot (R12), and no platform header appears outside the OS layer.
 - [ ] No new third-party dependency (R14), and nothing host-dependent or order-dependent reaches the output (R15).
-- [ ] The checkers pass — or, for one not yet written, the report says which and why.
+- [ ] The checkers pass: `make check-format`, `make tidy`, `make check-tree`.
 - [ ] It builds with Clang **and** GCC, and `make test` passes with no skips you did not report.
 - [ ] If it touches object emission, unwind, CodeView or generated code: `make test-link` was run, and the report says whether Windows acceptance was.
 - [ ] `Design/` is updated in the same commit if the change *was* a decision.
@@ -299,14 +299,14 @@ Until each lands, the rules it would enforce are review's problem — which is e
 
 ---
 
-## 8. The phase-0 tree and its conversion
+## 8. The phase-0 conversion
 
-The phase-0 sources — `src/` and `tests/`, about 5,000 lines — were written before these conventions arrived, and do not follow them. Functions are `snake_case` with a module prefix (`arena_init`, `coff_align_flags`, `nc_fatal`); the enumerators of named enums are prefixed `UPPER_CASE` (`CC_EQ`, `K_XSP`, `TK_LABEL`); parameters carry no `_`; fields are `snake_case`; file-scope `const` tables are lowercase; and the layout is 4-space K&R with the pointer bound right. Measured on 2026-11-23 with clang-format and clang-tidy 22.1.8: **all 29 `.c` and `.h` files differ from `.clang-format`**, and clang-tidy reports **more than 2,300 naming findings** and 16 others. That count is a lower bound, because it was taken on a Windows host without the UCRT headers on the include path, so some translation units only partly parsed.
+The phase-0 sources — `src/` and `tests/`, about 5,000 lines — were written before these conventions arrived, and did not follow them. Functions were `snake_case` with a module prefix (`arena_init`, `coff_align_flags`, `nc_fatal`); the enumerators of named enums were prefixed `UPPER_CASE` (`CC_EQ`, `K_XSP`, `TK_LABEL`); parameters carried no `_`; fields were `snake_case`; file-scope `const` tables were lowercase; and the layout was 4-space K&R with the pointer bound right. Measured first on 2026-11-23 with clang-format and clang-tidy 22.1.8: **all 29 `.c` and `.h` files differed from `.clang-format`**, and clang-tidy reported **more than 2,300 naming findings** and 16 others. That count was a lower bound, because it was taken on a Windows host without the UCRT headers on the include path, so some translation units only partly parsed.
 
-**The plan is one dedicated conversion, before phase-1 code lands**: rename every identifier to §1, reformat every file to §4, fix or explicitly record the non-naming clang-tidy findings, and wire `make check-format` and `make tidy` into CI in the same change, so that the tree cannot drift back. Renames are mechanical but not blind — R4's external spellings stay, and the enumerators that are format values stay `UPPER_CASE`. The design documents are not rewritten for it: they name things, not spellings.
+**The conversion was one dedicated change, before phase-1 code landed**: every identifier renamed to §1, every file reformatted to §4, the non-naming clang-tidy findings fixed, and `make check-format`, `make tidy` and `make check-tree` wired into CI in the same change, so that the tree cannot drift back. Renames were mechanical but not blind — R4's external spellings stayed, and the enumerators that are format values (`IMAGE_*`, `S_*`, `LF_*`) stayed `UPPER_CASE`. The design documents were not rewritten for it: they name things, not spellings.
 
-**Until then:**
+Re-measured on Linux under the pinned clang-tidy 18.1.3 (Q-28), with the mingw-w64 headers for the `_WIN32` half, the pre-conversion tree — 30 files, 5,243 lines — had **2,706 naming findings and 18 others**, plus 180 from the one check Q-28 excludes; all 30 files differed from `.clang-format`. The conversion was checked to change no behaviour: the phase-0 objects, listings and pseudo-sources are byte-identical to those of the pre-conversion tree, the linked image is identical under `/Brepro`, GCC-built and Clang-built tools emit identical objects, and the unit-test output is identical check for check.
 
-- **New files follow this file.** A new file calls the existing API by its current name (`arena_alloc`); the conversion renames the callers along with the callee.
-- **An edit to an existing file matches that file.** Do not convert piecemeal — a half-converted file, or one module renamed inside a feature PR, is the worst of both styles and a merge conflict for everyone else.
-- **Known gaps the conversion also closes**: `core/compiler.h` does not exist yet, so `core/core.h` calls `__builtin_clzll` and friends directly rather than through the shim R12 asks for; and `build.cmd` lacks `-Wshadow` (§3).
+**What it closed**: `core/compiler.h` now exists, and `core/core.h` reaches `__builtin_clzll` and friends only through its shims (R12); `build.cmd` now has `-Wshadow` (§3).
+
+**What it left open**: two headers export more than one module word (R9), which a rename cannot fix without inventing a split the design has not made. That is Q-29, settled when phase 1 defines MIR.

@@ -69,12 +69,20 @@ Verified so far:
 * `ncc-uwcheck --strict` passes on the `lld-link`-linked image, with every record read back from the final PE.
 * Every source, including the `_WIN32` code paths, compiles for Windows ARM64 against the mingw-w64 headers (`make check-windows`, in CI).
 
-Outstanding before the phase-0 exit criterion is met. All of these need Windows on Arm:
+**Windows on Arm acceptance, in CI.** The `windows-arm64` job has run on GitHub's hosted `windows-11-arm` runner since PR #3: Windows 11 26200, Visual Studio 2026 18.12, `link.exe` 14.52, clang 22.1. On the current `main`:
 
-* Linking and running both programs with `link.exe` (`tests/windows/p0-accept.cmd`).
-* Stepping them in the VS debugger.
-* Running `ncc-uwcheck` on Windows, where it cross-checks every function against `RtlVirtualUnwind`. The tool exists and passes on Linux with our own unwinder; `p0-accept.cmd` runs it.
-* Confirming the `S_FRAMEPROC` frame-register encoding against `cl /Z7` (Q-26).
+* `link.exe` links both programs, the no-CRT one and the one using the MSVC CRT (`printf`, TLS, the CRT's `__chkstk`).
+* Both programs run and print exactly the expected output.
+* `ncc-uwcheck --strict` on the `ncc`-built image passes, with `RtlVirtualUnwind` agreeing with our unwinder at every one of 96 prologue, body and epilogue boundaries.
+* On the CRT image, 383 mostly MSVC-compiled functions are checked: none fails, and forms the checker does not model are reported as skipped.
+* All unit tests pass natively on ARM64.
+
+The job found one real defect on its first run: the TLS `add` carrying `SECREL_HIGH12A` lacked its `lsl #12` bit. `link.exe` rejected it (LNK2040); `lld-link` had accepted it silently. It was fixed and is now covered by the `encode_sym` differential test.
+
+Outstanding before the phase-0 exit criterion is fully met. Both are manual:
+
+* Stepping through `p0_nocrt.exe` in the VS debugger: break on `p0_main`, step by line through the pseudo-source, check the call stack.
+* Confirming the `S_FRAMEPROC` frame-register encoding against `cl /Z7`, and `dumpbin /unwindinfo`'s "Expected opcode CB2053FF" annotation on the `__chkstk` allocation (Q-26).
 
 Moved to phase 1 because only the front end needs them: string interning, bigint, correctly rounded float parsing, SHA-256 file checksums. Jump tables move to phase 1 with `switch` lowering.
 

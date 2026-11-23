@@ -6,90 +6,120 @@
 
 /* Chunks are 64 KiB unless a single allocation needs more. A later version
  * maps chunks with VirtualAlloc/mmap directly; malloc is sufficient now. */
-enum { ARENA_CHUNK_SIZE = 64 * 1024 };
-
-struct ArenaChunk {
-    ArenaChunk *prev;
-    u8 *end;
-    alignas(16) u8 data[];
+enum
+{
+  ARENA_CHUNK_BYTES = 64 * 1024
 };
 
-void arena_init(Arena *a) { memset(a, 0, sizeof *a); }
+struct ArenaChunk
+{
+  ArenaChunk* prev;
+  u8* end;
+  alignas(16) u8 data[];
+};
 
-void arena_release(Arena *a) {
-    ArenaChunk *c = a->head;
-    while (c) {
-        ArenaChunk *p = c->prev;
-        free(c);
-        c = p;
+void ArenaInit(Arena* _a)
+{
+  memset(_a, 0, sizeof *_a);
+}
+
+void ArenaRelease(Arena* _a)
+{
+  ArenaChunk* c = _a->head;
+  while (c)
+  {
+    ArenaChunk* p = c->prev;
+    free(c);
+    c = p;
+  }
+  memset(_a, 0, sizeof *_a);
+}
+
+static void ArenaGrow(Arena* _a, size_t _need)
+{
+  size_t size = NC_MAX((size_t)ARENA_CHUNK_BYTES, _need + 16);
+  ArenaChunk* c = malloc(sizeof(ArenaChunk) + size);
+  if (!c)
+    NcFatal("out of memory (arena chunk of %zu bytes)", size);
+  c->prev = _a->head;
+  c->end = c->data + size;
+  _a->head = c;
+  _a->cur = c->data;
+  _a->end = c->end;
+  _a->bytesReserved += size;
+}
+
+void* ArenaAlloc(Arena* _a, size_t _size, size_t _align)
+{
+  NC_ASSERT(NC_IS_POW2(_align));
+  if (_size == 0)
+    _size = 1;
+  for (;;)
+  {
+    if (_a->cur)
+    {
+      /* Pad by pointer arithmetic, not by converting an integer back
+             * into a pointer, which loses provenance. */
+      size_t pad = (size_t)(-(uintptr_t)_a->cur) & (_align - 1);
+      if (pad + _size <= (size_t)(_a->end - _a->cur))
+      {
+        u8* p = _a->cur + pad;
+        _a->cur = p + _size;
+        return p;
+      }
     }
-    memset(a, 0, sizeof *a);
+    ArenaGrow(_a, _size + _align);
+  }
 }
 
-static void arena_grow(Arena *a, size_t need) {
-    size_t size = NC_MAX((size_t)ARENA_CHUNK_SIZE, need + 16);
-    ArenaChunk *c = malloc(sizeof(ArenaChunk) + size);
-    if (!c) nc_fatal("out of memory (arena chunk of %zu bytes)", size);
-    c->prev = a->head;
-    c->end = c->data + size;
-    a->head = c;
-    a->cur = c->data;
-    a->end = c->end;
-    a->bytes_reserved += size;
+void* ArenaZalloc(Arena* _a, size_t _size, size_t _align)
+{
+  void* p = ArenaAlloc(_a, _size, _align);
+  memset(p, 0, _size);
+  return p;
 }
 
-void *arena_alloc(Arena *a, size_t size, size_t align) {
-    NC_ASSERT(NC_IS_POW2(align));
-    if (size == 0) size = 1;
-    for (;;) {
-        if (a->cur) {
-            uintptr_t p = ((uintptr_t)a->cur + (align - 1)) & ~(uintptr_t)(align - 1);
-            if (p + size <= (uintptr_t)a->end) {
-                a->cur = (u8 *)(p + size);
-                return (void *)p;
-            }
-        }
-        arena_grow(a, size + align);
-    }
+char* ArenaStrndup(Arena* _a, const char* _s, size_t _n)
+{
+  char* d = ArenaAlloc(_a, _n + 1, 1);
+  memcpy(d, _s, _n);
+  d[_n] = 0;
+  return d;
 }
 
-void *arena_zalloc(Arena *a, size_t size, size_t align) {
-    void *p = arena_alloc(a, size, align);
-    memset(p, 0, size);
-    return p;
+char* ArenaStrdup(Arena* _a, const char* _s)
+{
+  return ArenaStrndup(_a, _s, strlen(_s));
 }
 
-char *arena_strndup(Arena *a, const char *s, size_t n) {
-    char *d = arena_alloc(a, n + 1, 1);
-    memcpy(d, s, n);
-    d[n] = 0;
-    return d;
+char* ArenaPrintf(Arena* _a, const char* _fmt, ...)
+{
+  va_list ap, ap2;
+  va_start(ap, _fmt);
+  va_copy(ap2, ap);
+  int n = vsnprintf(nullptr, 0, _fmt, ap);
+  va_end(ap);
+  NC_ASSERT(n >= 0);
+  char* d = ArenaAlloc(_a, (size_t)n + 1, 1);
+  vsnprintf(d, (size_t)n + 1, _fmt, ap2);
+  va_end(ap2);
+  return d;
 }
 
-char *arena_strdup(Arena *a, const char *s) { return arena_strndup(a, s, strlen(s)); }
-
-char *arena_printf(Arena *a, const char *fmt, ...) {
-    va_list ap, ap2;
-    va_start(ap, fmt);
-    va_copy(ap2, ap);
-    int n = vsnprintf(nullptr, 0, fmt, ap);
-    va_end(ap);
-    NC_ASSERT(n >= 0);
-    char *d = arena_alloc(a, (size_t)n + 1, 1);
-    vsnprintf(d, (size_t)n + 1, fmt, ap2);
-    va_end(ap2);
-    return d;
+ArenaMark ArenaGetMark(const Arena* _a)
+{
+  return (ArenaMark){_a->head, _a->cur};
 }
 
-ArenaMark arena_mark(const Arena *a) { return (ArenaMark){a->head, a->cur}; }
-
-void arena_reset(Arena *a, ArenaMark m) {
-    while (a->head != m.head) {
-        ArenaChunk *p = a->head->prev;
-        a->bytes_reserved -= (size_t)(a->head->end - a->head->data);
-        free(a->head);
-        a->head = p;
-    }
-    a->cur = m.cur;
-    a->end = a->head ? a->head->end : nullptr;
+void ArenaReset(Arena* _a, ArenaMark _m)
+{
+  while (_a->head != _m.head)
+  {
+    ArenaChunk* p = _a->head->prev;
+    _a->bytesReserved -= (size_t)(_a->head->end - _a->head->data);
+    free(_a->head);
+    _a->head = p;
+  }
+  _a->cur = _m.cur;
+  _a->end = _a->head ? _a->head->end : nullptr;
 }

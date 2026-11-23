@@ -5,11 +5,11 @@
 #include "core.h"
 
 /* Reads a whole file. Returns false if it cannot be read. */
-bool os_read_file(const char *path, u8 **data, size_t *size);
+bool OsReadFile(const char* _path, u8** _data, size_t* _size);
 
 /* Writes a file atomically: data goes to a temporary file in the same
  * directory, which is then renamed over the destination, so a crash never
  * leaves a truncated object file behind. */
-bool os_write_file_atomic(const char *path, const void *data, size_t size);
+bool OsWriteFileAtomic(const char* _path, const void* _data, size_t _size);
 
 #endif

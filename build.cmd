@@ -4,7 +4,7 @@ rem Design/13-self-hosting-bootstrap.md). Needs clang on PATH: either LLVM for
 rem Windows or the "C++ Clang tools for Windows" component of VS 2026 (run
 rem from a Native Tools Command Prompt so the UCRT headers and libs are found).
 setlocal enabledelayedexpansion
-set CFLAGS=-std=c2x -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -D_CRT_SECURE_NO_WARNINGS
+set CFLAGS=-std=c2x -O1 -g -Wall -Wextra -Werror -Wshadow -Wno-unused-parameter -D_CRT_SECURE_NO_WARNINGS
 if not exist build mkdir build
 rem cmd does not expand wildcards for clang, so collect the file list here.
 set LIB_SRC=
@@ -14,4 +14,5 @@ for %%f in (tests\unit\*.c) do set TEST_SRC=!TEST_SRC! %%f
 clang %CFLAGS% %LIB_SRC% src\tools\p0demo.c -o build\p0demo.exe || exit /b 1
 clang %CFLAGS% %LIB_SRC% %TEST_SRC% -o build\ncc-test.exe || exit /b 1
 clang %CFLAGS% %LIB_SRC% src\tools\uwcheck.c -o build\ncc-uwcheck.exe || exit /b 1
-echo built build\p0demo.exe, build\ncc-test.exe and build\ncc-uwcheck.exe
+clang %CFLAGS% %LIB_SRC% src\tools\checktree.c -o build\ncc-check-tree.exe || exit /b 1
+echo built build\p0demo.exe, build\ncc-test.exe, build\ncc-uwcheck.exe and build\ncc-check-tree.exe
