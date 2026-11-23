@@ -18,9 +18,9 @@ LIB_OBJ := $(LIB_SRC:%.c=$(BUILD)/%.o)
 TEST_SRC := $(wildcard tests/unit/*.c)
 TEST_OBJ := $(TEST_SRC:%.c=$(BUILD)/%.o)
 
-.PHONY: all test test-link clean
+.PHONY: all test test-link check-windows clean
 
-all: $(BUILD)/ncc-test $(BUILD)/p0demo
+all: $(BUILD)/ncc-test $(BUILD)/p0demo $(BUILD)/ncc-uwcheck
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -36,13 +36,25 @@ $(BUILD)/ncc-test: $(TEST_OBJ) $(BUILD)/libncc.a
 $(BUILD)/p0demo: $(BUILD)/src/tools/p0demo.o $(BUILD)/libncc.a
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
+$(BUILD)/ncc-uwcheck: $(BUILD)/src/tools/uwcheck.o $(BUILD)/libncc.a
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+
 test: $(BUILD)/ncc-test
 	NCC_TEST_TMP=$(BUILD) $(BUILD)/ncc-test
 
-test-link: $(BUILD)/p0demo
+test-link: $(BUILD)/p0demo $(BUILD)/ncc-uwcheck
 	sh tests/link/run.sh $(BUILD)
+
+# Compiles every source for Windows ARM64 against the mingw-w64 headers
+# (syntax and type checking only: catches _WIN32-only breakage on Linux).
+MINGW_INC ?= /usr/share/mingw-w64/include
+check-windows:
+	@for f in $(LIB_SRC) $(TEST_SRC) src/tools/*.c; do \
+	  clang --target=aarch64-w64-windows-gnu -isystem $(MINGW_INC) $(CSTD) $(WARN) \
+	        -fsyntax-only $$f || exit 1; done
+	@echo "all sources compile for Windows ARM64"
 
 clean:
 	rm -rf $(BUILD)
 
--include $(LIB_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(BUILD)/src/tools/p0demo.d
+-include $(LIB_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(BUILD)/src/tools/p0demo.d $(BUILD)/src/tools/uwcheck.d

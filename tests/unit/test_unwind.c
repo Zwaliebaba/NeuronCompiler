@@ -148,6 +148,35 @@ void test_unwind(void) {
     CHECKF(mutations > 50 && caught == mutations, "verifier caught %u of %u mutations", caught,
            mutations);
 
+    /* Packed-word mutations: every change to RegI, RegF, H, CR or FrameSize
+     * must be rejected. Changing RegI or RegF only drops or adds a register
+     * restore; this is caught only because the sweep clobbers saved
+     * callee-saved registers after the prologue. Without that, nothing would
+     * ever change the register and the omission would go unnoticed. */
+    u32 pk_mut = 0, pk_caught = 0;
+    for (u32 ng = 0; ng <= 10; ng++)
+        for (u32 nf = 0; nf <= 8; nf++) {
+            FrameDesc d = {.n_gpr = (u8)ng, .n_fpr = (u8)nf, .locals = 32};
+            build(&b, &d, 1);
+            if (!b.rec.packed) { unwind_record_free(&b.rec); continue; }
+            u32 orig = b.rec.packed_word;
+            static const struct { u32 shift, width; } fields[] = {
+                {13, 3}, {16, 4}, {20, 1}, {21, 2}, {23, 9}};
+            for (u32 fi = 0; fi < NC_ARRAY_LEN(fields); fi++)
+                for (u32 v = 0; v < (1u << fields[fi].width); v++) {
+                    u32 mask = ((1u << fields[fi].width) - 1) << fields[fi].shift;
+                    u32 m = (orig & ~mask) | v << fields[fi].shift;
+                    if (m == orig) continue;
+                    b.rec.packed_word = m;
+                    pk_mut++;
+                    if (!verify(&b, err, sizeof err)) pk_caught++;
+                }
+            b.rec.packed_word = orig;
+            unwind_record_free(&b.rec);
+        }
+    CHECKF(pk_mut > 500 && pk_caught == pk_mut, "verifier caught %u of %u packed-word mutations",
+           pk_caught, pk_mut);
+
     /* Record mutations: corrupt each unwind-code byte of a full record. */
     FrameDesc big = {.n_gpr = 4, .n_fpr = 2, .home_args = true, .locals = 9000, .outgoing = 32};
     build(&b, &big, 2);

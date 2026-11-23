@@ -66,12 +66,14 @@ Verified so far:
 * The no-CRT program links with `lld-link` against an import library generated from a `.def` file, and LLVM's readers decode the unwind data, imports and PDB as intended.
 * Output is byte-identical across runs and across GCC- versus Clang-built tools.
 * Clean under ASan and UBSan.
+* `ncc-uwcheck --strict` passes on the `lld-link`-linked image, with every record read back from the final PE.
+* Every source, including the `_WIN32` code paths, compiles for Windows ARM64 against the mingw-w64 headers (`make check-windows`, in CI).
 
 Outstanding before the phase-0 exit criterion is met. All of these need Windows on Arm:
 
 * Linking and running both programs with `link.exe` (`tests/windows/p0-accept.cmd`).
 * Stepping them in the VS debugger.
-* The `RtlVirtualUnwind` single-step harness.
+* Running `ncc-uwcheck` on Windows, where it cross-checks every function against `RtlVirtualUnwind`. The tool exists and passes on Linux with our own unwinder; `p0-accept.cmd` runs it.
 * Confirming the `S_FRAMEPROC` frame-register encoding against `cl /Z7` (Q-26).
 
 Moved to phase 1 because only the front end needs them: string interning, bigint, correctly rounded float parsing, SHA-256 file checksums. Jump tables move to phase 1 with `switch` lowering.

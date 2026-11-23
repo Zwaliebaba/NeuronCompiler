@@ -98,6 +98,42 @@ void unwind_record_free(UnwindRecord *r);
 bool unwind_verify(const FramePlan *p, const u8 *code, u32 func_bytes, const u32 *epilogs,
                    u32 nepilogs, const UnwindRecord *r, char *err, size_t errsz);
 
+/* ---- checking records read back from a linked image -------------------- */
+
+/* Register state handed to an external unwinder (RtlVirtualUnwind). */
+typedef struct UwMachine {
+    u64 x[31]; /* x29 = fp, x30 = lr */
+    u64 sp;
+    u64 d[32]; /* low 64 bits of v0..v31 */
+    u64 pc;    /* after unwinding: the return address */
+} UwMachine;
+
+/* Unwinds one frame from function-relative byte offset `func_offset` in
+ * machine state `state`, whose stack memory consists of the given
+ * (address, value) words (absolute addresses near the entry sp). */
+typedef bool (*UwOsUnwindFn)(void *ctx, u32 func_offset, const UwMachine *state,
+                             const u64 *mem_addr, const u64 *mem_val, u32 nmem, UwMachine *out);
+
+typedef enum UwCheckResult : u8 {
+    UWC_OK,      /* every prologue/epilogue boundary checked */
+    UWC_PARTIAL, /* prologue and body checked; epilogue location not recorded (E bit) */
+    UWC_SKIPPED, /* uses instructions or unwind codes the verifier does not model */
+    UWC_FAIL,    /* an unwinder recovered the wrong state */
+} UwCheckResult;
+
+/* Rebuilds a record from an image's .pdata second word and the bytes at the
+ * referenced .xdata RVA (`xdata` may be null for packed entries). */
+bool unwind_record_from_pdata(u32 word2, const u8 *xdata, size_t avail, UnwindRecord *out,
+                              u32 *func_bytes);
+
+/* The verifier's sweep, driven only by the record: emulates every prologue
+ * prefix and epilogue boundary with entry stack pointer `entry_sp` and checks
+ * that our unwinder and, if `os` is non-null, the external one both recover
+ * the entry state. */
+UwCheckResult unwind_crosscheck(const u8 *code, u32 func_bytes, const UnwindRecord *r,
+                                u64 entry_sp, UwOsUnwindFn os, void *os_ctx, u32 *checks,
+                                char *err, size_t errsz);
+
 /* Decodes unwind-code bytes into a human-readable listing (for -S and tests). */
 void unwind_format_codes(const u8 *codes, u32 len, Buf *out);
 
