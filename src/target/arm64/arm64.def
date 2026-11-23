@@ -1,0 +1,276 @@
+/* arm64.def — the ARM64 instruction table (Design/06-arm64-backend.md §1).
+ *
+ * INSN(id, mnemonic, form, fixed_bits, kd, kn, km, sz)
+ *
+ *   form        encoding/printing form, see A64Form in a64.h
+ *   fixed_bits  the instruction word with all operand fields zero
+ *   kd, kn, km  register kinds of MInst.rd/.rn/.rm (rd also covers Rt, and
+ *               MInst.ra (Ra / Rt2) uses kd's kind); K_ means unused
+ *   sz          log2 of the memory access size (loads/stores), else 0
+ *
+ * Every entry is covered by the llvm-mc differential test
+ * (tests/unit/test_encode.c). Keep entries grouped by encoding class. */
+
+/* ---- add/sub (immediate) ------------------------------------------------ */
+INSN(ADDXri,  "add",  F_ADDSUB_IMM, 0x91000000, K_XSP, K_XSP, K_, 0)
+INSN(ADDWri,  "add",  F_ADDSUB_IMM, 0x11000000, K_WSP, K_WSP, K_, 0)
+INSN(SUBXri,  "sub",  F_ADDSUB_IMM, 0xD1000000, K_XSP, K_XSP, K_, 0)
+INSN(SUBWri,  "sub",  F_ADDSUB_IMM, 0x51000000, K_WSP, K_WSP, K_, 0)
+INSN(ADDSXri, "adds", F_ADDSUB_IMM, 0xB1000000, K_X,   K_XSP, K_, 0)
+INSN(ADDSWri, "adds", F_ADDSUB_IMM, 0x31000000, K_W,   K_WSP, K_, 0)
+INSN(SUBSXri, "subs", F_ADDSUB_IMM, 0xF1000000, K_X,   K_XSP, K_, 0)
+INSN(SUBSWri, "subs", F_ADDSUB_IMM, 0x71000000, K_W,   K_WSP, K_, 0)
+INSN(CMPXri,  "cmp",  F_CMP_IMM,    0xF100001F, K_,    K_XSP, K_, 0)
+INSN(CMPWri,  "cmp",  F_CMP_IMM,    0x7100001F, K_,    K_WSP, K_, 0)
+INSN(CMNXri,  "cmn",  F_CMP_IMM,    0xB100001F, K_,    K_XSP, K_, 0)
+INSN(CMNWri,  "cmn",  F_CMP_IMM,    0x3100001F, K_,    K_WSP, K_, 0)
+INSN(MOVXsp,  "mov",  F_MOV_SP,     0x91000000, K_XSP, K_XSP, K_, 0) /* add rd, rn, #0 */
+
+/* ---- logical (immediate) ------------------------------------------------ */
+INSN(ANDXri,  "and",  F_LOGIC_IMM, 0x92000000, K_XSP, K_X, K_, 0)
+INSN(ORRXri,  "orr",  F_LOGIC_IMM, 0xB2000000, K_XSP, K_X, K_, 0)
+INSN(EORXri,  "eor",  F_LOGIC_IMM, 0xD2000000, K_XSP, K_X, K_, 0)
+INSN(ANDSXri, "ands", F_LOGIC_IMM, 0xF2000000, K_X,   K_X, K_, 0)
+INSN(ANDWri,  "and",  F_LOGIC_IMM, 0x12000000, K_WSP, K_W, K_, 0)
+INSN(ORRWri,  "orr",  F_LOGIC_IMM, 0x32000000, K_WSP, K_W, K_, 0)
+INSN(EORWri,  "eor",  F_LOGIC_IMM, 0x52000000, K_WSP, K_W, K_, 0)
+INSN(ANDSWri, "ands", F_LOGIC_IMM, 0x72000000, K_W,   K_W, K_, 0)
+INSN(TSTXri,  "tst",  F_TST_IMM,   0xF200001F, K_,    K_X, K_, 0)
+INSN(TSTWri,  "tst",  F_TST_IMM,   0x7200001F, K_,    K_W, K_, 0)
+
+/* ---- move wide ---------------------------------------------------------- */
+INSN(MOVZX, "movz", F_MOVW, 0xD2800000, K_X, K_, K_, 0)
+INSN(MOVZW, "movz", F_MOVW, 0x52800000, K_W, K_, K_, 0)
+INSN(MOVNX, "movn", F_MOVW, 0x92800000, K_X, K_, K_, 0)
+INSN(MOVNW, "movn", F_MOVW, 0x12800000, K_W, K_, K_, 0)
+INSN(MOVKX, "movk", F_MOVW, 0xF2800000, K_X, K_, K_, 0)
+INSN(MOVKW, "movk", F_MOVW, 0x72800000, K_W, K_, K_, 0)
+
+/* ---- PC-relative addressing --------------------------------------------- */
+INSN(ADR,  "adr",  F_ADR, 0x10000000, K_X, K_, K_, 0)
+INSN(ADRP, "adrp", F_ADR, 0x90000000, K_X, K_, K_, 0)
+
+/* ---- bitfield ----------------------------------------------------------- */
+INSN(SBFMX, "sbfm", F_BITFIELD, 0x93400000, K_X, K_X, K_, 0)
+INSN(UBFMX, "ubfm", F_BITFIELD, 0xD3400000, K_X, K_X, K_, 0)
+INSN(BFMX,  "bfm",  F_BITFIELD, 0xB3400000, K_X, K_X, K_, 0)
+INSN(SBFMW, "sbfm", F_BITFIELD, 0x13000000, K_W, K_W, K_, 0)
+INSN(UBFMW, "ubfm", F_BITFIELD, 0x53000000, K_W, K_W, K_, 0)
+INSN(BFMW,  "bfm",  F_BITFIELD, 0x33000000, K_W, K_W, K_, 0)
+INSN(LSLXi, "lsl",  F_LSL_IMM,  0xD3400000, K_X, K_X, K_, 0)
+INSN(LSLWi, "lsl",  F_LSL_IMM,  0x53000000, K_W, K_W, K_, 0)
+INSN(LSRXi, "lsr",  F_LSR_IMM,  0xD3400000, K_X, K_X, K_, 0)
+INSN(LSRWi, "lsr",  F_LSR_IMM,  0x53000000, K_W, K_W, K_, 0)
+INSN(ASRXi, "asr",  F_LSR_IMM,  0x93400000, K_X, K_X, K_, 0)
+INSN(ASRWi, "asr",  F_LSR_IMM,  0x13000000, K_W, K_W, K_, 0)
+INSN(SXTBX, "sxtb", F_EXTEND,   0x93401C00, K_X, K_W, K_, 0)
+INSN(SXTHX, "sxth", F_EXTEND,   0x93403C00, K_X, K_W, K_, 0)
+INSN(SXTWX, "sxtw", F_EXTEND,   0x93407C00, K_X, K_W, K_, 0)
+INSN(UXTBW, "uxtb", F_EXTEND,   0x53001C00, K_W, K_W, K_, 0)
+INSN(UXTHW, "uxth", F_EXTEND,   0x53003C00, K_W, K_W, K_, 0)
+
+/* ---- logical (shifted register) ----------------------------------------- */
+INSN(ANDXrs,  "and",  F_LOGIC_REG, 0x8A000000, K_X, K_X, K_X, 0)
+INSN(BICXrs,  "bic",  F_LOGIC_REG, 0x8A200000, K_X, K_X, K_X, 0)
+INSN(ORRXrs,  "orr",  F_LOGIC_REG, 0xAA000000, K_X, K_X, K_X, 0)
+INSN(ORNXrs,  "orn",  F_LOGIC_REG, 0xAA200000, K_X, K_X, K_X, 0)
+INSN(EORXrs,  "eor",  F_LOGIC_REG, 0xCA000000, K_X, K_X, K_X, 0)
+INSN(EONXrs,  "eon",  F_LOGIC_REG, 0xCA200000, K_X, K_X, K_X, 0)
+INSN(ANDSXrs, "ands", F_LOGIC_REG, 0xEA000000, K_X, K_X, K_X, 0)
+INSN(ANDWrs,  "and",  F_LOGIC_REG, 0x0A000000, K_W, K_W, K_W, 0)
+INSN(BICWrs,  "bic",  F_LOGIC_REG, 0x0A200000, K_W, K_W, K_W, 0)
+INSN(ORRWrs,  "orr",  F_LOGIC_REG, 0x2A000000, K_W, K_W, K_W, 0)
+INSN(EORWrs,  "eor",  F_LOGIC_REG, 0x4A000000, K_W, K_W, K_W, 0)
+INSN(ANDSWrs, "ands", F_LOGIC_REG, 0x6A000000, K_W, K_W, K_W, 0)
+INSN(MOVXr,   "mov",  F_MOV_REG,   0xAA0003E0, K_X, K_,  K_X, 0) /* orr rd, xzr, rm */
+INSN(MOVWr,   "mov",  F_MOV_REG,   0x2A0003E0, K_W, K_,  K_W, 0)
+INSN(MVNXr,   "mvn",  F_MOV_REG,   0xAA2003E0, K_X, K_,  K_X, 0)
+INSN(MVNWr,   "mvn",  F_MOV_REG,   0x2A2003E0, K_W, K_,  K_W, 0)
+INSN(TSTXrs,  "tst",  F_CMP_REG,   0xEA00001F, K_,  K_X, K_X, 0)
+INSN(TSTWrs,  "tst",  F_CMP_REG,   0x6A00001F, K_,  K_W, K_W, 0)
+
+/* ---- add/sub (shifted register) ----------------------------------------- */
+INSN(ADDXrs,  "add",  F_ADDSUB_REG, 0x8B000000, K_X, K_X, K_X, 0)
+INSN(SUBXrs,  "sub",  F_ADDSUB_REG, 0xCB000000, K_X, K_X, K_X, 0)
+INSN(ADDSXrs, "adds", F_ADDSUB_REG, 0xAB000000, K_X, K_X, K_X, 0)
+INSN(SUBSXrs, "subs", F_ADDSUB_REG, 0xEB000000, K_X, K_X, K_X, 0)
+INSN(ADDWrs,  "add",  F_ADDSUB_REG, 0x0B000000, K_W, K_W, K_W, 0)
+INSN(SUBWrs,  "sub",  F_ADDSUB_REG, 0x4B000000, K_W, K_W, K_W, 0)
+INSN(ADDSWrs, "adds", F_ADDSUB_REG, 0x2B000000, K_W, K_W, K_W, 0)
+INSN(SUBSWrs, "subs", F_ADDSUB_REG, 0x6B000000, K_W, K_W, K_W, 0)
+INSN(CMPXrs,  "cmp",  F_CMP_REG,    0xEB00001F, K_,  K_X, K_X, 0)
+INSN(CMPWrs,  "cmp",  F_CMP_REG,    0x6B00001F, K_,  K_W, K_W, 0)
+INSN(CMNXrs,  "cmn",  F_CMP_REG,    0xAB00001F, K_,  K_X, K_X, 0)
+INSN(NEGXr,   "neg",  F_NEG,        0xCB0003E0, K_X, K_,  K_X, 0)
+INSN(NEGWr,   "neg",  F_NEG,        0x4B0003E0, K_W, K_,  K_W, 0)
+
+/* ---- add/sub (extended register); rm is W for uxtw/sxtw/... options ----- */
+INSN(ADDXrx, "add", F_ADDSUB_EXT, 0x8B200000, K_XSP, K_XSP, K_X, 0)
+INSN(SUBXrx, "sub", F_ADDSUB_EXT, 0xCB200000, K_XSP, K_XSP, K_X, 0)
+
+/* ---- data processing, 3 source ------------------------------------------ */
+INSN(MADDX,  "madd",   F_DP3,     0x9B000000, K_X, K_X, K_X, 0)
+INSN(MSUBX,  "msub",   F_DP3,     0x9B008000, K_X, K_X, K_X, 0)
+INSN(MADDW,  "madd",   F_DP3,     0x1B000000, K_W, K_W, K_W, 0)
+INSN(MSUBW,  "msub",   F_DP3,     0x1B008000, K_W, K_W, K_W, 0)
+INSN(SMADDL, "smaddl", F_DP3,     0x9B200000, K_X, K_W, K_W, 0)
+INSN(UMADDL, "umaddl", F_DP3,     0x9BA00000, K_X, K_W, K_W, 0)
+INSN(MULX,   "mul",    F_DP3_NOA, 0x9B007C00, K_X, K_X, K_X, 0)
+INSN(MULW,   "mul",    F_DP3_NOA, 0x1B007C00, K_W, K_W, K_W, 0)
+INSN(SMULL,  "smull",  F_DP3_NOA, 0x9B207C00, K_X, K_W, K_W, 0)
+INSN(UMULL,  "umull",  F_DP3_NOA, 0x9BA07C00, K_X, K_W, K_W, 0)
+INSN(SMULH,  "smulh",  F_DP3_NOA, 0x9B407C00, K_X, K_X, K_X, 0)
+INSN(UMULH,  "umulh",  F_DP3_NOA, 0x9BC07C00, K_X, K_X, K_X, 0)
+
+/* ---- data processing, 2 source ------------------------------------------ */
+INSN(UDIVX, "udiv", F_DP2, 0x9AC00800, K_X, K_X, K_X, 0)
+INSN(SDIVX, "sdiv", F_DP2, 0x9AC00C00, K_X, K_X, K_X, 0)
+INSN(UDIVW, "udiv", F_DP2, 0x1AC00800, K_W, K_W, K_W, 0)
+INSN(SDIVW, "sdiv", F_DP2, 0x1AC00C00, K_W, K_W, K_W, 0)
+INSN(LSLVX, "lsl",  F_DP2, 0x9AC02000, K_X, K_X, K_X, 0)
+INSN(LSRVX, "lsr",  F_DP2, 0x9AC02400, K_X, K_X, K_X, 0)
+INSN(ASRVX, "asr",  F_DP2, 0x9AC02800, K_X, K_X, K_X, 0)
+INSN(RORVX, "ror",  F_DP2, 0x9AC02C00, K_X, K_X, K_X, 0)
+INSN(LSLVW, "lsl",  F_DP2, 0x1AC02000, K_W, K_W, K_W, 0)
+INSN(LSRVW, "lsr",  F_DP2, 0x1AC02400, K_W, K_W, K_W, 0)
+INSN(ASRVW, "asr",  F_DP2, 0x1AC02800, K_W, K_W, K_W, 0)
+
+/* ---- conditional select ------------------------------------------------- */
+INSN(CSELX,  "csel",  F_CSEL, 0x9A800000, K_X, K_X, K_X, 0)
+INSN(CSINCX, "csinc", F_CSEL, 0x9A800400, K_X, K_X, K_X, 0)
+INSN(CSINVX, "csinv", F_CSEL, 0xDA800000, K_X, K_X, K_X, 0)
+INSN(CSNEGX, "csneg", F_CSEL, 0xDA800400, K_X, K_X, K_X, 0)
+INSN(CSELW,  "csel",  F_CSEL, 0x1A800000, K_W, K_W, K_W, 0)
+INSN(CSINCW, "csinc", F_CSEL, 0x1A800400, K_W, K_W, K_W, 0)
+INSN(CSETX,  "cset",  F_CSET, 0x9A9F07E0, K_X, K_,  K_,  0) /* csinc rd, xzr, xzr, !cc */
+INSN(CSETW,  "cset",  F_CSET, 0x1A9F07E0, K_W, K_,  K_,  0)
+INSN(CSETMX, "csetm", F_CSET, 0xDA9F03E0, K_X, K_,  K_,  0) /* csinv rd, xzr, xzr, !cc */
+
+/* ---- data processing, 1 source ------------------------------------------ */
+INSN(CLZX,  "clz",  F_DP1, 0xDAC01000, K_X, K_X, K_, 0)
+INSN(CLZW,  "clz",  F_DP1, 0x5AC01000, K_W, K_W, K_, 0)
+INSN(RBITX, "rbit", F_DP1, 0xDAC00000, K_X, K_X, K_, 0)
+INSN(REVX,  "rev",  F_DP1, 0xDAC00C00, K_X, K_X, K_, 0)
+INSN(REVW,  "rev",  F_DP1, 0x5AC00800, K_W, K_W, K_, 0)
+
+/* ---- load/store, unsigned scaled offset --------------------------------- */
+INSN(LDRXui,   "ldr",   F_LDST_UIMM, 0xF9400000, K_X, K_XSP, K_, 3)
+INSN(STRXui,   "str",   F_LDST_UIMM, 0xF9000000, K_X, K_XSP, K_, 3)
+INSN(LDRWui,   "ldr",   F_LDST_UIMM, 0xB9400000, K_W, K_XSP, K_, 2)
+INSN(STRWui,   "str",   F_LDST_UIMM, 0xB9000000, K_W, K_XSP, K_, 2)
+INSN(LDRHHui,  "ldrh",  F_LDST_UIMM, 0x79400000, K_W, K_XSP, K_, 1)
+INSN(STRHHui,  "strh",  F_LDST_UIMM, 0x79000000, K_W, K_XSP, K_, 1)
+INSN(LDRBBui,  "ldrb",  F_LDST_UIMM, 0x39400000, K_W, K_XSP, K_, 0)
+INSN(STRBBui,  "strb",  F_LDST_UIMM, 0x39000000, K_W, K_XSP, K_, 0)
+INSN(LDRSWui,  "ldrsw", F_LDST_UIMM, 0xB9800000, K_X, K_XSP, K_, 2)
+INSN(LDRSHXui, "ldrsh", F_LDST_UIMM, 0x79800000, K_X, K_XSP, K_, 1)
+INSN(LDRSBXui, "ldrsb", F_LDST_UIMM, 0x39800000, K_X, K_XSP, K_, 0)
+INSN(LDRSHWui, "ldrsh", F_LDST_UIMM, 0x79C00000, K_W, K_XSP, K_, 1)
+INSN(LDRSBWui, "ldrsb", F_LDST_UIMM, 0x39C00000, K_W, K_XSP, K_, 0)
+INSN(LDRDui,   "ldr",   F_LDST_UIMM, 0xFD400000, K_D, K_XSP, K_, 3)
+INSN(STRDui,   "str",   F_LDST_UIMM, 0xFD000000, K_D, K_XSP, K_, 3)
+INSN(LDRSui,   "ldr",   F_LDST_UIMM, 0xBD400000, K_S, K_XSP, K_, 2)
+INSN(STRSui,   "str",   F_LDST_UIMM, 0xBD000000, K_S, K_XSP, K_, 2)
+INSN(LDRQui,   "ldr",   F_LDST_UIMM, 0x3DC00000, K_Q, K_XSP, K_, 4)
+INSN(STRQui,   "str",   F_LDST_UIMM, 0x3D800000, K_Q, K_XSP, K_, 4)
+
+/* ---- load/store, 9-bit signed offset: pre-index, post-index, unscaled ---- */
+INSN(STRXpre,  "str",  F_LDST_PRE,      0xF8000C00, K_X, K_XSP, K_, 3)
+INSN(LDRXpre,  "ldr",  F_LDST_PRE,      0xF8400C00, K_X, K_XSP, K_, 3)
+INSN(STRXpost, "str",  F_LDST_POST,     0xF8000400, K_X, K_XSP, K_, 3)
+INSN(LDRXpost, "ldr",  F_LDST_POST,     0xF8400400, K_X, K_XSP, K_, 3)
+INSN(STRDpre,  "str",  F_LDST_PRE,      0xFC000C00, K_D, K_XSP, K_, 3)
+INSN(LDRDpre,  "ldr",  F_LDST_PRE,      0xFC400C00, K_D, K_XSP, K_, 3)
+INSN(STRDpost, "str",  F_LDST_POST,     0xFC000400, K_D, K_XSP, K_, 3)
+INSN(LDRDpost, "ldr",  F_LDST_POST,     0xFC400400, K_D, K_XSP, K_, 3)
+INSN(LDURX,    "ldur", F_LDST_UNSCALED, 0xF8400000, K_X, K_XSP, K_, 3)
+INSN(STURX,    "stur", F_LDST_UNSCALED, 0xF8000000, K_X, K_XSP, K_, 3)
+INSN(LDURW,    "ldur", F_LDST_UNSCALED, 0xB8400000, K_W, K_XSP, K_, 2)
+INSN(STURW,    "stur", F_LDST_UNSCALED, 0xB8000000, K_W, K_XSP, K_, 2)
+
+/* ---- load/store, register offset (rm extended by MInst.shift option) ---- */
+INSN(LDRXro,  "ldr",   F_LDST_REG, 0xF8600800, K_X, K_XSP, K_X, 3)
+INSN(STRXro,  "str",   F_LDST_REG, 0xF8200800, K_X, K_XSP, K_X, 3)
+INSN(LDRWro,  "ldr",   F_LDST_REG, 0xB8600800, K_W, K_XSP, K_X, 2)
+INSN(STRWro,  "str",   F_LDST_REG, 0xB8200800, K_W, K_XSP, K_X, 2)
+INSN(LDRSWro, "ldrsw", F_LDST_REG, 0xB8A00800, K_X, K_XSP, K_X, 2)
+INSN(LDRBBro, "ldrb",  F_LDST_REG, 0x38600800, K_W, K_XSP, K_X, 0)
+INSN(STRBBro, "strb",  F_LDST_REG, 0x38200800, K_W, K_XSP, K_X, 0)
+INSN(LDRDro,  "ldr",   F_LDST_REG, 0xFC600800, K_D, K_XSP, K_X, 3)
+
+/* ---- load/store pair (rd = Rt, ra = Rt2) -------------------------------- */
+INSN(STPXi,    "stp", F_LDST_PAIR,      0xA9000000, K_X, K_XSP, K_, 3)
+INSN(STPXpre,  "stp", F_LDST_PAIR_PRE,  0xA9800000, K_X, K_XSP, K_, 3)
+INSN(STPXpost, "stp", F_LDST_PAIR_POST, 0xA8800000, K_X, K_XSP, K_, 3)
+INSN(LDPXi,    "ldp", F_LDST_PAIR,      0xA9400000, K_X, K_XSP, K_, 3)
+INSN(LDPXpre,  "ldp", F_LDST_PAIR_PRE,  0xA9C00000, K_X, K_XSP, K_, 3)
+INSN(LDPXpost, "ldp", F_LDST_PAIR_POST, 0xA8C00000, K_X, K_XSP, K_, 3)
+INSN(STPDi,    "stp", F_LDST_PAIR,      0x6D000000, K_D, K_XSP, K_, 3)
+INSN(STPDpre,  "stp", F_LDST_PAIR_PRE,  0x6D800000, K_D, K_XSP, K_, 3)
+INSN(STPDpost, "stp", F_LDST_PAIR_POST, 0x6C800000, K_D, K_XSP, K_, 3)
+INSN(LDPDi,    "ldp", F_LDST_PAIR,      0x6D400000, K_D, K_XSP, K_, 3)
+INSN(LDPDpre,  "ldp", F_LDST_PAIR_PRE,  0x6DC00000, K_D, K_XSP, K_, 3)
+INSN(LDPDpost, "ldp", F_LDST_PAIR_POST, 0x6CC00000, K_D, K_XSP, K_, 3)
+INSN(STPWi,    "stp", F_LDST_PAIR,      0x29000000, K_W, K_XSP, K_, 2)
+INSN(LDPWi,    "ldp", F_LDST_PAIR,      0x29400000, K_W, K_XSP, K_, 2)
+INSN(STPQi,    "stp", F_LDST_PAIR,      0xAD000000, K_Q, K_XSP, K_, 4)
+INSN(LDPQi,    "ldp", F_LDST_PAIR,      0xAD400000, K_Q, K_XSP, K_, 4)
+
+/* ---- load literal ------------------------------------------------------- */
+INSN(LDRXl, "ldr", F_LDR_LIT, 0x58000000, K_X, K_, K_, 3)
+INSN(LDRWl, "ldr", F_LDR_LIT, 0x18000000, K_W, K_, K_, 2)
+INSN(LDRDl, "ldr", F_LDR_LIT, 0x5C000000, K_D, K_, K_, 3)
+
+/* ---- branches ----------------------------------------------------------- */
+INSN(B,     "b",    F_B,     0x14000000, K_,  K_,  K_, 0)
+INSN(BL,    "bl",   F_B,     0x94000000, K_,  K_,  K_, 0)
+INSN(Bcc,   "b",    F_BCOND, 0x54000000, K_,  K_,  K_, 0)
+INSN(CBZX,  "cbz",  F_CB,    0xB4000000, K_X, K_,  K_, 0)
+INSN(CBNZX, "cbnz", F_CB,    0xB5000000, K_X, K_,  K_, 0)
+INSN(CBZW,  "cbz",  F_CB,    0x34000000, K_W, K_,  K_, 0)
+INSN(CBNZW, "cbnz", F_CB,    0x35000000, K_W, K_,  K_, 0)
+INSN(TBZ,   "tbz",  F_TB,    0x36000000, K_X, K_,  K_, 0)
+INSN(TBNZ,  "tbnz", F_TB,    0x37000000, K_X, K_,  K_, 0)
+INSN(BR,    "br",   F_BR,    0xD61F0000, K_,  K_X, K_, 0)
+INSN(BLR,   "blr",  F_BR,    0xD63F0000, K_,  K_X, K_, 0)
+INSN(RET,   "ret",  F_RET,   0xD65F0000, K_,  K_X, K_, 0)
+
+/* ---- system ------------------------------------------------------------- */
+INSN(NOP,     "nop",     F_SYS, 0xD503201F, K_, K_, K_, 0)
+INSN(YIELD,   "yield",   F_SYS, 0xD503203F, K_, K_, K_, 0)
+INSN(PACIBSP, "pacibsp", F_SYS, 0xD503237F, K_, K_, K_, 0)
+INSN(AUTIBSP, "autibsp", F_SYS, 0xD50323FF, K_, K_, K_, 0)
+INSN(DMB_ISH, "dmb ish", F_SYS, 0xD5033BBF, K_, K_, K_, 0)
+INSN(DSB_ISH, "dsb ish", F_SYS, 0xD5033B9F, K_, K_, K_, 0)
+INSN(ISB,     "isb",     F_SYS, 0xD5033FDF, K_, K_, K_, 0)
+INSN(BRK,     "brk",     F_BRK, 0xD4200000, K_, K_, K_, 0)
+
+/* ---- floating point ----------------------------------------------------- */
+INSN(FMOVDr,   "fmov",   F_FP1,      0x1E604000, K_D, K_D, K_, 0)
+INSN(FMOVSr,   "fmov",   F_FP1,      0x1E204000, K_S, K_S, K_, 0)
+INSN(FMOVDX,   "fmov",   F_FP1,      0x9E670000, K_D, K_X, K_, 0)
+INSN(FMOVXD,   "fmov",   F_FP1,      0x9E660000, K_X, K_D, K_, 0)
+INSN(FMOVSW,   "fmov",   F_FP1,      0x1E270000, K_S, K_W, K_, 0)
+INSN(FMOVWS,   "fmov",   F_FP1,      0x1E260000, K_W, K_S, K_, 0)
+INSN(FNEGD,    "fneg",   F_FP1,      0x1E614000, K_D, K_D, K_, 0)
+INSN(FABSD,    "fabs",   F_FP1,      0x1E60C000, K_D, K_D, K_, 0)
+INSN(FSQRTD,   "fsqrt",  F_FP1,      0x1E61C000, K_D, K_D, K_, 0)
+INSN(SCVTFDX,  "scvtf",  F_FP1,      0x9E620000, K_D, K_X, K_, 0)
+INSN(UCVTFDX,  "ucvtf",  F_FP1,      0x9E630000, K_D, K_X, K_, 0)
+INSN(FCVTZSXD, "fcvtzs", F_FP1,      0x9E780000, K_X, K_D, K_, 0)
+INSN(FCVTZUXD, "fcvtzu", F_FP1,      0x9E790000, K_X, K_D, K_, 0)
+INSN(FCVTDS,   "fcvt",   F_FP1,      0x1E22C000, K_D, K_S, K_, 0)
+INSN(FCVTSD,   "fcvt",   F_FP1,      0x1E624000, K_S, K_D, K_, 0)
+INSN(FADDD,    "fadd",   F_FP2,      0x1E602800, K_D, K_D, K_D, 0)
+INSN(FSUBD,    "fsub",   F_FP2,      0x1E603800, K_D, K_D, K_D, 0)
+INSN(FMULD,    "fmul",   F_FP2,      0x1E600800, K_D, K_D, K_D, 0)
+INSN(FDIVD,    "fdiv",   F_FP2,      0x1E601800, K_D, K_D, K_D, 0)
+INSN(FADDS,    "fadd",   F_FP2,      0x1E202800, K_S, K_S, K_S, 0)
+INSN(FSUBS,    "fsub",   F_FP2,      0x1E203800, K_S, K_S, K_S, 0)
+INSN(FMULS,    "fmul",   F_FP2,      0x1E200800, K_S, K_S, K_S, 0)
+INSN(FDIVS,    "fdiv",   F_FP2,      0x1E201800, K_S, K_S, K_S, 0)
+INSN(FMADDD,   "fmadd",  F_DP3,      0x1F400000, K_D, K_D, K_D, 0)
+INSN(FCMPD,    "fcmp",   F_FCMP,     0x1E602000, K_,  K_D, K_D, 0)
+INSN(FCMPS,    "fcmp",   F_FCMP,     0x1E202000, K_,  K_S, K_S, 0)
+INSN(FMOVDi,   "fmov",   F_FMOV_IMM, 0x1E601000, K_D, K_,  K_, 0)
+INSN(FMOVSi,   "fmov",   F_FMOV_IMM, 0x1E201000, K_S, K_,  K_, 0)

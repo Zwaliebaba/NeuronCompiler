@@ -31,7 +31,7 @@ These were fixed at the outset and the rest of the design assumes them.
 
 | ID | Decision | Consequence |
 |----|----------|-------------|
-| D-01 | Implementation language is C23, and the compiler self-hosts. | No C++ templates or RAII; a small in-house core library (arenas, vectors, hash maps, interning) is a first-class component. Stage-0 needs a C23-capable host compiler (Clang ≥ 19 or GCC ≥ 14); MSVC `cl` is not a supported stage-0. |
+| D-01 | Implementation language is C23, and the compiler self-hosts. | No C++ templates or RAII; a small in-house core library (arenas, vectors, hash maps, interning) is a first-class component. Stage-0 needs a C23-capable host compiler (Clang ≥ 18 or GCC ≥ 13, `-std=c2x`); MSVC `cl` is not a supported stage-0. |
 | D-02 | Optimisation target is an SSA mid-end of roughly -O1/-O2 class. | Typed SSA IR with block parameters, a classic scalar pipeline, inlining, linear-scan register allocation with splitting. No auto-vectorisation or LTO in v1. |
 | D-03 | The compiler must consume the real Windows SDK and UCRT headers. | An MSVC compatibility layer (layout, `__declspec`, intrinsics, `_MSC_VER`) is in scope from phase 2 and is the largest schedule risk. |
 | D-04 | CodeView debug info is part of v1. | Full `/Z7`-style `.debug$S`/`.debug$T` emission; `link.exe /DEBUG` produces the PDB, so we never write PDBs ourselves. |
@@ -41,4 +41,4 @@ These were fixed at the outset and the rest of the design assumes them.
 
 ## Status
 
-Design draft 2, November 2026: the open questions from draft 1 are decided (see [16-open-questions.md](16-open-questions.md)), except Q-19, which gets settled by inspecting `cl` output. The project stays private for now (Q-01). Claude implements and you review (Q-02), starting with phase 0. Nothing is implemented yet.
+Design draft 2, November 2026: the open questions from draft 1 are decided (see [16-open-questions.md](16-open-questions.md)), except Q-19, which gets settled by inspecting `cl` output. The project stays private for now (Q-01). Claude implements and you review (Q-02). Phase 0 (the back-end tail: encoder, COFF, unwind, minimal CodeView) is implemented and tested on Linux; its Windows acceptance steps are pending, see [15-roadmap.md](15-roadmap.md) §4.

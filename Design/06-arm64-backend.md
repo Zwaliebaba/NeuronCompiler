@@ -90,7 +90,7 @@ Frame lowering selects one of a small number of *canonical shapes* that map 1:1 
         | dynamic area (VLA / _alloca)  |  grows below; sp moves, x29 does not
 ```
 
-The common case (non-variadic, no outgoing stack arguments, locals ≤ 512 bytes) produces exactly the canonical packed form:
+The common case (non-variadic, no outgoing stack arguments, locals plus the `x29`/`x30` pair ≤ 504 bytes) produces exactly the canonical packed form. Microsoft's packed-unwind table allows the pre-indexed `stp x29, x30, [sp, #-N]!` form up to N = 512, but the mirrored epilogue instruction `ldp x29, x30, [sp], #512` is not encodable (the scaled 7-bit offset tops out at +504), so at exactly 512 we use the `sub sp` form and a full record. The phase-0 test sweep found this.
 
 ```asm
     stp     x19, x20, [sp, #-32]!     // save_regp_x  (int save area)
